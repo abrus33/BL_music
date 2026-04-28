@@ -1,3 +1,9 @@
+// ============================================================================
+// LoginPage.qml - 登录页面
+// 功能：提供 Cookie 登录的入口（当前为占位页面）
+// 阶段二实现：接入 AuthService，实现 Cookie 导入功能
+// ============================================================================
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -19,6 +25,7 @@ ScrollView {
             anchors.margins: 24
             spacing: 20
 
+            // 页面标题
             Label {
                 text: qsTr("登录")
                 color: "#ffffff"
@@ -26,6 +33,7 @@ ScrollView {
                 font.bold: true
             }
 
+            // 功能说明
             Label {
                 text: qsTr("登录后可同步你的 B站收藏夹与个性化内容。")
                 color: "#bcbcbc"
@@ -34,6 +42,7 @@ ScrollView {
                 font.pixelSize: 14
             }
 
+            // ---- Cookie 登录卡片 ----
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 200
@@ -44,6 +53,7 @@ ScrollView {
                     anchors.centerIn: parent
                     spacing: 16
 
+                    // 登录方式标题
                     Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: qsTr("Cookie 登录")
@@ -52,6 +62,7 @@ ScrollView {
                         font.bold: true
                     }
 
+                    // 引导说明
                     Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: qsTr("导入浏览器 Cookie 以登录 B站账号")
@@ -59,17 +70,21 @@ ScrollView {
                         font.pixelSize: 13
                     }
 
+                    // ---- 导入 Cookie 按钮 ----
+                    // 当前 enabled: false（阶段二实现前不可用）
                     Button {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: qsTr("导入 Cookie")
                         highlighted: true
-                        enabled: false
+                        enabled: false  // 阶段二实现后启用
 
+                        // 自定义按钮背景
                         background: Rectangle {
                             radius: 8
                             color: parent.enabled ? "#fb7299" : "#3a3a3a"
                         }
 
+                        // 自定义按钮文字
                         contentItem: Label {
                             text: parent.text
                             color: parent.enabled ? "#ffffff" : "#7d7d7d"
@@ -82,6 +97,7 @@ ScrollView {
                         implicitHeight: 40
                     }
 
+                    // 提示：此功能尚未实现
                     Label {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: qsTr("登录功能将在阶段二实现")

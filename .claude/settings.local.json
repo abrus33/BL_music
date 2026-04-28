@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where cmake)",
+      "Bash(echo \"PATH=$PATH\")",
+      "Read(//d//**)",
+      "Bash(cmd.exe /c \"where cmake 2>&1 || echo cmake not found in cmd\")",
+      "Bash(cmd.exe /c \"d: && cd \"\"\\C++\\cursor_music\\build\\Desktop_Qt_6_10_2_MinGW_64_bit-Debug\"\" && if exist build.ninja echo build.ninja exists && if exist CMakeCache.txt echo CMakeCache.txt exists\")",
+      "Bash(cmd.exe /c \"dir /s /b d:\\cmake.exe 2>nul & dir /s /b d:\\Qt\\cmake.exe 2>nul & dir /s /b d:\\cmake\\bin\\cmake.exe 2>nul & dir /s /b e:\\cmake.exe 2>nul\")",
+      "Bash(cmd.exe /c \"where /r d:\\ cmake.exe 2>nul & where /r e:\\ cmake.exe 2>nul & where /r c:\\ cmake.exe 2>nul\")",
+      "Bash(cmd.exe /c \"dir /s /b e:\\LenovoSoftstore\\Install\\Qt\\6.10.2\\mingw_64\\bin\\qmake6.exe 2>nul || dir /s /b e:\\LenovoSoftstore\\Install\\Qt\\6* 2>nul | head -20\")",
+      "Bash(cmd.exe /c \"dir /s /b e:\\LenovoSoftstore\\Install\\Qt\\Tools\\mingw* 2>nul | head -20\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
