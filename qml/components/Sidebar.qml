@@ -39,7 +39,7 @@ Rectangle {
 
         // 阶段标识（粉色文字 #fb7299 = B站品牌色）
         Label {
-            text: qsTr("阶段一 · 基础框架")
+            text: qsTr("阶段二 · 核心功能")
             color: "#fb7299"
             font.pixelSize: 13
         }

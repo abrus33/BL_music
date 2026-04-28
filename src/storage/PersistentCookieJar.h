@@ -110,6 +110,13 @@ public:
     bool setCookiesFromUrl(const QList<QNetworkCookie> &cookieList, const QUrl &url) override;
 
     /**
+     * @brief 清除所有 Cookie（退出登录时使用）
+     *
+     * 清空内存中的 Cookie 并保存空文件到磁盘
+     */
+    void clearCookies();
+
+    /**
      * @brief 检查是否已登录
      * @return true 如果存在非空的 SESSDATA Cookie
      *

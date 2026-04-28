@@ -22,6 +22,12 @@ qt_add_executable(appcursor_music
     src/network/HttpClient.cpp
     src/storage/AppSettings.cpp
     src/storage/PersistentCookieJar.cpp
+    # ==== 阶段二新增源文件 ====
+    src/bilibili/BilibiliApiClient.cpp
+    src/auth/AuthService.cpp
+    src/bilibili/FavoriteService.cpp
+    src/player/MediaResolver.cpp
+    src/player/PlayerController.cpp
 )
 
 qt_add_qml_module(appcursor_music
@@ -39,11 +45,7 @@ target_include_directories(appcursor_music
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
-# If you are developing for iOS or macOS you should consider setting an
-# explicit, fixed bundle identifier manually though.
 set_target_properties(appcursor_music PROPERTIES
-#    MACOSX_BUNDLE_GUI_IDENTIFIER com.example.appcursor_music
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE

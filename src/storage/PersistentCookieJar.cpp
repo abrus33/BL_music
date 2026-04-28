@@ -116,26 +116,51 @@ QNetworkCookie PersistentCookieJar::getCookie(const QString &name) const
 }
 
 /**
- * @brief 从 Cookie 字符串导入（浏览器导出格式）
- * @param cookieString 分号分隔的 Cookie 字符串
+ * @brief 从浏览器 Cookie 字符串导入
+ * @param cookieString 浏览器 Cookie 字符串
  *
- * 典型字符串格式：
- * "SESSDATA=abc123; bili_jct=def456; DedeUserID=789; DedeUserID__ckMd=xyz"
+ * 浏览器 Cookie 格式（Cookie 请求头格式）：
+ *   "SESSDATA=abc123; bili_jct=def456; DedeUserID=789"
  *
- * 注意：parseCookies 解析字符串时必须符合 HTTP Set-Cookie 格式
- * 简单的 "key=value; key2=value2" 格式可能无法完整解析
- * 在阶段二实现 AuthService 时，会封装更完善的导入逻辑
+ * 注意：不能使用 QNetworkCookie::parseCookies()，因为它只解析 Set-Cookie 响应头格式
+ * Set-Cookie 格式（parseCookies 所需）：
+ *   "SESSDATA=abc123; Path=/; Domain=.bilibili.com; HttpOnly"
+ * Cookie 请求头格式（浏览器导出）：
+ *   "SESSDATA=abc123; bili_jct=def456; DedeUserID=789"
+ *
+ * 这里手动解析：按分号拆分，对每个 key=value 创建 QNetworkCookie
+ * 并设置正确的 Domain 和 Path 以便在访问 B站 API 时自动携带
  */
 void PersistentCookieJar::setCookieString(const QString &cookieString)
 {
-    // parseCookies 解析 HTTP Set-Cookie 格式
-    // 传入的字符串会被自动添加必要的路径和域信息
-    const auto parsedCookies = QNetworkCookie::parseCookies(cookieString.toUtf8());
-    if (!parsedCookies.isEmpty()) {
-        for (const auto &cookie : parsedCookies) {
-            insertCookie(cookie);  // 逐个插入到 CookieJar
+    // 按分号分割每个 key=value 对
+    const auto parts = cookieString.split(';');
+    QList<QNetworkCookie> cookies;
+
+    for (const auto &part : parts) {
+        int eqPos = part.indexOf('=');
+        if (eqPos > 0) {
+            QString name = part.left(eqPos).trimmed();
+            QString value = part.mid(eqPos + 1).trimmed();
+
+            if (!name.isEmpty()) {
+                // 创建 QNetworkCookie 并设置 Domain/Path
+                // Domain=.bilibili.com 使其能匹配 api.bilibili.com 和 www.bilibili.com
+                // Path=/ 使其对所有路径生效
+                QNetworkCookie cookie(name.toUtf8(), value.toUtf8());
+                cookie.setDomain(QStringLiteral(".bilibili.com"));
+                cookie.setPath(QStringLiteral("/"));
+                cookies.append(cookie);
+            }
         }
-        save();  // 立即保存到磁盘
+    }
+
+    // 将解析后的 Cookie 逐个插入到 CookieJar
+    if (!cookies.isEmpty()) {
+        for (const auto &cookie : cookies) {
+            insertCookie(cookie);
+        }
+        save();  // 立即持久化到磁盘
     }
 }
 
@@ -185,6 +210,18 @@ bool PersistentCookieJar::isLoggedIn() const
 {
     // SESSDATA 是 B站的核心会话凭证，空值表示未登录
     return !getCookie(QStringLiteral("SESSDATA")).value().isEmpty();
+}
+
+/**
+ * @brief 清除所有 Cookie
+ *
+ * 先清空内存中的 Cookie 列表（通过基类的 setAllCookies 保护方法）
+ * 然后保存空文件到磁盘覆盖旧数据
+ */
+void PersistentCookieJar::clearCookies()
+{
+    setAllCookies(QList<QNetworkCookie>());
+    save();
 }
 
 /**

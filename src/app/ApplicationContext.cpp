@@ -16,30 +16,47 @@
 #include "storage/AppSettings.h"         // 应用设置
 #include "storage/PersistentCookieJar.h" // Cookie 持久化
 
+// ---- 阶段二新增服务 ----
+#include "bilibili/BilibiliApiClient.h"  // B站 API 客户端
+#include "auth/AuthService.h"            // 登录认证服务
+#include "bilibili/FavoriteService.h"    // 收藏夹服务
+#include "player/MediaResolver.h"        // 媒体解析器
+#include "player/PlayerController.h"     // 播放器控制器
+
 /**
  * @brief 构造函数
  * @param parent Qt 父对象
  *
  * 以 ApplicationContext 自身为父对象创建各服务实例，
  * 这样当 ApplicationContext 销毁时，各服务会自动被 Qt 内存管理机制释放。
+ *
+ * 服务创建顺序（注意依赖关系）：
+ * 1. 基础层：AppSettings, PersistentCookieJar, HttpClient（无依赖）
+ * 2. API 层：BilibiliApiClient（依赖 HttpClient）
+ * 3. 业务层：AuthService（依赖 CookieJar + ApiClient）
+ *             FavoriteService（依赖 ApiClient）
+ *             MediaResolver（依赖 ApiClient）
+ * 4. 表现层：PlayerController（无依赖）
  */
 ApplicationContext::ApplicationContext(QObject *parent)
     : QObject(parent)
 
-    // 创建三个核心服务实例：
-    // ------
-    // AppSettings: 基于 QSettings 的 INI 配置存储
-    //              -> 配置文件位于 %APPDATA%/cursor_music/cursor_music.ini
-    // ------
-    // PersistentCookieJar: 继承 QNetworkCookieJar
-    //              -> Cookie 文件位于 %APPDATA%/cursor_music/cookies.dat
-    //              -> 通过 QDataStream 序列化/反序列化
-    // ------
-    // HttpClient: 基于 QNetworkAccessManager 的 HTTP 请求封装
-    //              -> 自动设置 UA、Referer 等 B站请求必需的 Header
+    // ==== 阶段一：基础服务 ====
     , m_settings(new AppSettings(this))
     , m_cookieJar(new PersistentCookieJar(this))
     , m_httpClient(new HttpClient(this))
+
+    // ==== 阶段二：B站业务服务 ====
+    // BilibiliApiClient 依赖于 HttpClient，用于发送 HTTP 请求
+    , m_bilibiliApiClient(new BilibiliApiClient(m_httpClient, this))
+    // AuthService 依赖 CookieJar（持久化 Cookie）和 ApiClient（验证登录态）
+    , m_authService(new AuthService(m_cookieJar, m_bilibiliApiClient, this))
+    // FavoriteService 依赖 ApiClient（获取收藏夹数据）
+    , m_favoriteService(new FavoriteService(m_bilibiliApiClient, this))
+    // MediaResolver 依赖 ApiClient（解析播放 URL）
+    , m_mediaResolver(new MediaResolver(m_bilibiliApiClient, this))
+    // PlayerController 独立，内部创建 QMediaPlayer + QAudioOutput
+    , m_playerController(new PlayerController(this))
 {
 }
 
@@ -52,7 +69,6 @@ QString ApplicationContext::appName() const
 /** @return 当前 Qt 版本号，例如 "6.10.2" */
 QString ApplicationContext::qtVersion() const
 {
-    // qVersion() 是 QtGlobal 提供的全局函数，返回编译时链接的 Qt 版本
     return QString::fromLatin1(qVersion());
 }
 
@@ -74,6 +90,36 @@ HttpClient *ApplicationContext::httpClient() const
     return m_httpClient;
 }
 
+/** @return B站 API 客户端指针 */
+BilibiliApiClient *ApplicationContext::bilibiliApiClient() const
+{
+    return m_bilibiliApiClient;
+}
+
+/** @return 登录认证服务指针 */
+AuthService *ApplicationContext::authService() const
+{
+    return m_authService;
+}
+
+/** @return 收藏夹服务指针 */
+FavoriteService *ApplicationContext::favoriteService() const
+{
+    return m_favoriteService;
+}
+
+/** @return 媒体解析器指针 */
+MediaResolver *ApplicationContext::mediaResolver() const
+{
+    return m_mediaResolver;
+}
+
+/** @return 播放器控制器指针 */
+PlayerController *ApplicationContext::playerController() const
+{
+    return m_playerController;
+}
+
 /**
  * @brief 初始化服务
  *
@@ -85,17 +131,22 @@ HttpClient *ApplicationContext::httpClient() const
  *    Qt6 的 setCookieJar() 不会接管 CookieJar 的所有权（不负责销毁）
  *    所以 m_cookieJar 仍然由 ApplicationContext 管理生命周期
  *
+ * 3. 验证登录态：如果 Cookie 存在，调用 AuthService::checkLogin()
+ *    确认 Cookie 是否仍然有效（未过期）
+ *
  * 这样所有后续通过 HttpClient 发出的 HTTP 请求都会自动携带已保存的 Cookie，
  * 实现登录态的持久化。
  */
 void ApplicationContext::initialize()
 {
-    // 从磁盘加载之前持久化的 Cookie 数据
-    // cookies.dat 中存储的是基于 QDataStream 序列化的 QList<QByteArray>
+    // 1. 从磁盘加载之前持久化的 Cookie 数据
     m_cookieJar->load();
 
-    // 将自定义 CookieJar 挂载到 QNetworkAccessManager
-    // 注意：在 Qt6 中 QNetworkAccessManager::setCookieJar() **不** 接管所有权
-    // 所以 m_cookieJar 仍然由 this（ApplicationContext）管理生命周期
+    // 2. 将自定义 CookieJar 挂载到 QNetworkAccessManager
     m_httpClient->networkManager()->setCookieJar(m_cookieJar);
+
+    // 3. 如果本地有 Cookie，立即验证登录态
+    if (m_cookieJar->isLoggedIn()) {
+        m_authService->checkLogin();
+    }
 }
