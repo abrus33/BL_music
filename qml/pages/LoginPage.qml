@@ -54,13 +54,13 @@ ScrollView {
 
                 ColumnLayout {
                     id: loginLayout
-                    anchors.centerIn: parent
-                    anchors.margins: 20
+                    Layout.fillWidth: true
+                    Layout.margins: 20
                     spacing: 16
 
                     // 登录方式标题
                     Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        Layout.alignment: Qt.AlignHCenter
                         text: qsTr("Cookie 登录")
                         color: "#f5f5f5"
                         font.pixelSize: 18
@@ -69,13 +69,12 @@ ScrollView {
 
                     // 引导说明
                     Label {
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        Layout.alignment: Qt.AlignHCenter
                         text: qsTr("从浏览器开发者工具复制 Cookie 字符串粘贴到下方输入框")
                         color: "#9d9d9d"
                         font.pixelSize: 13
                         wrapMode: Text.Wrap
                         Layout.maximumWidth: 500
-                        horizontalAlignment: Text.AlignHCenter
                     }
 
                     // ---- Cookie 输入框 ----
@@ -84,7 +83,7 @@ ScrollView {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 40
                         Layout.maximumWidth: 500
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        Layout.alignment: Qt.AlignHCenter
                         radius: 8
                         color: "#1a1a1a"
                         border.color: "#3a3a3a"
@@ -109,7 +108,7 @@ ScrollView {
 
                     // ---- 操作按钮 ----
                     RowLayout {
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        Layout.alignment: Qt.AlignHCenter
                         spacing: 12
 
                         // 导入 Cookie 按钮
@@ -169,7 +168,7 @@ ScrollView {
                     // 登录结果提示（监听 C++ 信号自动更新）
                     Label {
                         id: loginResultLabel
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        Layout.alignment: Qt.AlignHCenter
                         text: qsTr("")
                         color: "#fb7299"
                         font.pixelSize: 12

@@ -94,6 +94,18 @@ public:
     // ==================== 音频/视频流 API ====================
 
     /**
+     * @brief 获取视频分P信息（获取 cid）
+     *
+     * API: GET https://api.bilibili.com/x/web-interface/view?bvid={bvid}
+     * 返回 data.cid 为第一分P的 cid
+     *
+     * @param bvid    视频 BV 号
+     * @param callback 回调 (success, cid, error)
+     */
+    void getVideoCid(const QString &bvid,
+        std::function<void(bool success, qint64 cid, QString error)> callback);
+
+    /**
      * @brief 获取音频播放 URL（web 端 192K）
      *
      * API: GET https://www.bilibili.com/audio/music-service-c/web/url

@@ -14,8 +14,11 @@
 #include <QDateTime>
 #include <QMap>
 #include <QSet>
+#include <QDebug>
 
 #include "network/HttpClient.h"
+
+#define DBG qDebug().noquote() << "[BilibiliApiClient]"
 
 /**
  * @brief 构造函数
@@ -239,9 +242,31 @@ void BilibiliApiClient::getFavoriteResourceList(qint64 mediaId, int page, int pa
  * @param callback 回调 (success, url, error)
  *                 url 可直接用于 QMediaPlayer 播放
  */
+/**
+ * @brief 获取视频分P信息（获取 cid）
+ */
+void BilibiliApiClient::getVideoCid(const QString &bvid,
+    std::function<void(bool, qint64, QString)> callback)
+{
+    DBG << "getVideoCid() - bvid:" << bvid;
+    QUrl url(QStringLiteral("https://api.bilibili.com/x/web-interface/view"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("bvid"), bvid);
+    url.setQuery(query);
+    getJson(QStringLiteral("video_view"), url,
+            [callback, bvid](bool success, QJsonObject json, QString error) {
+        if (!success) { callback(false, 0, error); return; }
+        QJsonObject data = json.value(QStringLiteral("data")).toObject();
+        qint64 cid = static_cast<qint64>(data.value(QStringLiteral("cid")).toDouble(0));
+        DBG << "cid:" << cid;
+        callback(cid != 0, cid, QString());
+    });
+}
+
 void BilibiliApiClient::getAudioStreamUrl(qint64 audioId,
     std::function<void(bool, QString, QString)> callback)
 {
+    DBG << "getAudioStreamUrl() - audioId:" << audioId;
     QUrl url(QStringLiteral("https://www.bilibili.com/audio/music-service-c/web/url"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("sid"), QString::number(audioId));
@@ -257,21 +282,28 @@ void BilibiliApiClient::getAudioStreamUrl(qint64 audioId,
         disconnect(*conn);
         delete conn;
 
+        DBG << "音频URL响应 - statusCode:" << response.statusCode
+            << "body.length:" << response.body.length();
+
         if (!response.success) {
+            DBG << "网络错误:" << response.errorString;
             callback(false, QString(), QStringLiteral("网络错误: ") + response.errorString);
             return;
         }
 
         QJsonObject json = response.json();
         if (json.isEmpty()) {
+            DBG << "JSON 解析失败, body:" << QString::fromUtf8(response.body.left(200));
             callback(false, QString(), QStringLiteral("JSON 解析失败"));
             return;
         }
 
         // 音频接口使用 code + msg 字段
         int code = json.value(QStringLiteral("code")).toInt(-1);
+        DBG << "音频响应 code:" << code;
         if (code != 0) {
             QString msg = json.value(QStringLiteral("msg")).toString(QStringLiteral("未知错误"));
+            DBG << "API 错误:" << code << msg;
             emit apiError(QStringLiteral("audio_url"), code, msg);
             callback(false, QString(), QString::number(code) + QStringLiteral(": ") + msg);
             return;
@@ -280,6 +312,7 @@ void BilibiliApiClient::getAudioStreamUrl(qint64 audioId,
         // 从 cdns 数组中取第一个可播放 URL
         QJsonObject data = json.value(QStringLiteral("data")).toObject();
         QJsonArray cdns = data.value(QStringLiteral("cdns")).toArray();
+        DBG << "cdns 数量:" << cdns.size();
         if (cdns.isEmpty()) {
             callback(false, QString(), QStringLiteral("没有可用的音频流地址"));
             return;
@@ -287,6 +320,7 @@ void BilibiliApiClient::getAudioStreamUrl(qint64 audioId,
 
         // cdns[0] 为主地址，cdns[1] 为备用地址
         QString audioUrl = cdns[0].toString();
+        DBG << "音频URL获取成功, 长度:" << audioUrl.length();
         callback(true, audioUrl, QString());
     });
 }
@@ -336,14 +370,15 @@ void BilibiliApiClient::getVideoPlayUrl(const QString &bvid, qint64 cid,
 
             QJsonObject data = json.value(QStringLiteral("data")).toObject();
 
-            // 优先尝试 DASH 格式的视频流
+            // 优先尝试 DASH 格式的音频流（音乐客户端只需要音频）
             QJsonObject dash = data.value(QStringLiteral("dash")).toObject();
             if (!dash.isEmpty()) {
-                // DASH 格式：取第一个视频流的 baseUrl
-                QJsonArray video = dash.value(QStringLiteral("video")).toArray();
-                if (!video.isEmpty()) {
-                    QString baseUrl = video[0].toObject().value(QStringLiteral("baseUrl")).toString();
+                // DASH 格式：取第一个音频流的 baseUrl
+                QJsonArray audio = dash.value(QStringLiteral("audio")).toArray();
+                if (!audio.isEmpty()) {
+                    QString baseUrl = audio[0].toObject().value(QStringLiteral("baseUrl")).toString();
                     if (!baseUrl.isEmpty()) {
+                        DBG << "使用 DASH 音频流";
                         callback(true, baseUrl, QString());
                         return;
                     }

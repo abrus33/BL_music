@@ -1,78 +1,130 @@
 // ============================================================================
 // PlayerController.cpp - 播放器控制器实现
-// 功能：封装 QMediaPlayer + QAudioOutput，提供播放/暂停/seek/音量控制
+// 功能：使用 QNetworkAccessManager 下载音频到 QBuffer，
+//       再通过 setSourceDevice() 播放，解决 CDN 403 和流式播放问题
 // ============================================================================
 
 #include "PlayerController.h"
 
 #include <QMediaPlayer>
 #include <QAudioOutput>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QBuffer>
 #include <QUrl>
 #include <QDebug>
 
-/**
- * @brief 构造函数
- *
- * 创建并配置 QMediaPlayer 和 QAudioOutput：
- * - QMediaPlayer: 负责媒体解码和播放控制
- * - QAudioOutput: 负责音频输出和音量控制
- *
- * 两者需要通过 setAudioOutput() 关联
- */
+#define DBG qDebug().noquote() << "[PlayerController]"
+
 PlayerController::PlayerController(QObject *parent)
     : QObject(parent)
     , m_player(new QMediaPlayer(this))
     , m_audioOutput(new QAudioOutput(this))
+    , m_nam(new QNetworkAccessManager(this))
+    , m_currentReply(nullptr)
+    , m_mediaBuffer(nullptr)
 {
-    // 将音频输出关联到播放器
     m_player->setAudioOutput(m_audioOutput);
 
-    // ---- 连接 QMediaPlayer 的信号 ----
-    // 播放状态变化
     connect(m_player, &QMediaPlayer::playbackStateChanged,
             this, &PlayerController::onStateChanged);
-
-    // 播放位置变化（约每秒更新 4 次）
     connect(m_player, &QMediaPlayer::positionChanged,
             this, &PlayerController::positionChanged);
-
-    // 媒体总时长变化（加载完成后更新）
     connect(m_player, &QMediaPlayer::durationChanged,
             this, &PlayerController::durationChanged);
-
-    // 播放错误
     connect(m_player, &QMediaPlayer::errorOccurred,
             this, &PlayerController::onErrorOccurred);
-
-    // 播放源变化
     connect(m_player, &QMediaPlayer::sourceChanged,
             this, &PlayerController::sourceChanged);
+
+    DBG << "PlayerController 初始化完成";
 }
 
-// ==================== 属性访问方法 ====================
-
-QString PlayerController::source() const
-{
-    return m_source;
-}
+QString PlayerController::source() const { return m_source; }
 
 /**
  * @brief 设置播放源
- * @param url 媒体 URL
  *
- * 自动开始加载媒体，加载完成后可通过 play() 开始播放
- * 也可以直接调用 play() 自动播放
+ * 流程：
+ * 1. 用 QNetworkAccessManager 发送带 User-Agent/Referer 的 GET 请求
+ * 2. 等待下载完成
+ * 3. 将数据写入 QBuffer（内存缓冲区）
+ * 4. 通过 setSourceDevice() 传给 QMediaPlayer
  */
 void PlayerController::setSource(const QString &url)
 {
-    if (m_source == url)
+    if (m_source == url && !url.isEmpty())
         return;
 
-    m_source = url;
-    m_player->setSource(QUrl(url));
+    DBG << "setSource:" << url.left(80) << "...";
 
-    // 加载完成后自动准备播放
-    emit sourceChanged();
+    // 清理旧资源
+    if (m_currentReply) {
+        m_currentReply->disconnect();
+        m_currentReply->abort();
+        m_currentReply->deleteLater();
+        m_currentReply = nullptr;
+    }
+    if (m_mediaBuffer) {
+        m_player->setSourceDevice(nullptr, QUrl());  // 清除设备源
+        delete m_mediaBuffer;
+        m_mediaBuffer = nullptr;
+    }
+
+    m_source = url;
+
+    // 发起带正确 HTTP Header 的请求
+    QUrl qurl(url);
+    QNetworkRequest request(qurl);
+    request.setRawHeader("User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36");
+    request.setRawHeader("Referer", "https://www.bilibili.com");
+
+    QNetworkReply *reply = m_nam->get(request);
+    m_currentReply = reply;
+
+    // 连接下载完成信号
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        m_currentReply = nullptr;  // 防止重复清理
+
+        if (reply->error() != QNetworkReply::NoError) {
+            DBG << "下载失败:" << reply->errorString();
+            emit playerError(static_cast<int>(reply->error()), reply->errorString());
+            reply->deleteLater();
+            return;
+        }
+
+        // 读取所有下载数据
+        QByteArray data = reply->readAll();
+        DBG << "下载完成, 大小:" << data.size() << "字节";
+        reply->deleteLater();
+
+        if (data.isEmpty()) {
+            DBG << "下载数据为空!";
+            emit playerError(-1, QStringLiteral("下载数据为空"));
+            return;
+        }
+
+        // 将数据写入 QBuffer 并设为播放源
+        m_mediaBuffer = new QBuffer(this);
+        m_mediaBuffer->setData(data);
+        m_mediaBuffer->open(QIODevice::ReadOnly);
+
+        DBG << "设置 QBuffer 为播放源设备, 大小:" << data.size();
+        m_player->setSourceDevice(m_mediaBuffer, QUrl());
+        emit sourceChanged();
+
+        // 标记待播放并在媒体加载完成后自动播放
+        m_pendingPlay = true;
+    });
+
+    // 网络错误处理
+    connect(reply, &QNetworkReply::errorOccurred, this, [this](QNetworkReply::NetworkError err) {
+        DBG << "网络错误:" << err;
+    });
 }
 
 int PlayerController::position() const
@@ -93,106 +145,85 @@ qreal PlayerController::volume() const
 void PlayerController::setVolume(qreal vol)
 {
     vol = qBound(0.0, vol, 1.0);
-    if (qFuzzyCompare(m_audioOutput->volume(), vol))
+    if (qAbs(m_audioOutput->volume() - vol) < 0.0001)
         return;
-
     m_audioOutput->setVolume(vol);
     emit volumeChanged();
 }
 
-/**
- * @brief 获取播放状态的字符串表示
- * @return "Playing" / "Paused" / "Stopped"
- *
- * 字符串形式便于 QML 直接显示和判断
- */
 QString PlayerController::playbackState() const
 {
     switch (m_player->playbackState()) {
-    case QMediaPlayer::PlayingState:
-        return QStringLiteral("Playing");
-    case QMediaPlayer::PausedState:
-        return QStringLiteral("Paused");
-    default:
-        return QStringLiteral("Stopped");
+    case QMediaPlayer::PlayingState: return QStringLiteral("Playing");
+    case QMediaPlayer::PausedState: return QStringLiteral("Paused");
+    default: return QStringLiteral("Stopped");
     }
 }
 
-QString PlayerController::mediaTitle() const
-{
-    return m_mediaTitle;
-}
-
+QString PlayerController::mediaTitle() const { return m_mediaTitle; }
 void PlayerController::setMediaTitle(const QString &title)
 {
-    if (m_mediaTitle == title)
-        return;
+    if (m_mediaTitle == title) return;
     m_mediaTitle = title;
     emit mediaTitleChanged();
 }
 
-QString PlayerController::mediaCover() const
-{
-    return m_mediaCover;
-}
-
+QString PlayerController::mediaCover() const { return m_mediaCover; }
 void PlayerController::setMediaCover(const QString &cover)
 {
-    if (m_mediaCover == cover)
-        return;
+    if (m_mediaCover == cover) return;
     m_mediaCover = cover;
     emit mediaCoverChanged();
 }
 
-// ==================== 播放控制方法（Q_INVOKABLE） ====================
+// ==================== 控制方法 ====================
 
 void PlayerController::play()
 {
-    m_player->play();
+    DBG << "play(), playState:" << playbackState()
+        << "duration:" << m_player->duration();
+    m_pendingPlay = false;
+
+    if (m_player->playbackState() != QMediaPlayer::StoppedState ||
+        m_player->duration() > 0) {
+        m_player->play();
+    } else {
+        DBG << "媒体尚未加载完成, 设置 pendingPlay";
+        m_pendingPlay = true;
+    }
 }
 
 void PlayerController::pause()
 {
+    DBG << "pause()";
+    m_pendingPlay = false;
     m_player->pause();
 }
 
 void PlayerController::stop()
 {
+    m_pendingPlay = false;
     m_player->stop();
 }
 
 void PlayerController::seek(int positionMs)
 {
+    if (m_player->duration() <= 0) return;
+    DBG << "seek:" << positionMs;
     m_player->setPosition(positionMs);
 }
 
-// ==================== 内部槽函数 ====================
-
-/**
- * @brief 播放状态变化处理
- *
- * 将 QMediaPlayer::PlaybackState 枚举转换为 QString 后重新发射
- * 供 QML 绑定的 playbackState 属性更新
- */
 void PlayerController::onStateChanged()
 {
+    DBG << "playbackState:" << playbackState()
+        << "pendingPlay:" << m_pendingPlay;
     emit stateChanged();
 }
 
-/**
- * @brief 播放错误处理
- *
- * 当播放器遇到无法播放的媒体时触发
- * 常见错误：
- * - ResourceError: 媒体资源无法访问（URL 失效、网络问题）
- * - FormatError: 媒体格式不支持
- * - NetworkError: 网络连接问题
- */
 void PlayerController::onErrorOccurred()
 {
     QMediaPlayer::Error err = m_player->error();
     QString errorStr = m_player->errorString();
-
-    qWarning() << "PlayerController 错误:" << err << errorStr;
+    qWarning().noquote() << "[PlayerController] 错误:" << err << errorStr;
     emit playerError(static_cast<int>(err), errorStr);
 }

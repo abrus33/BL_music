@@ -11,26 +11,31 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
 
-    // ---- 窗口基础属性 ----
     width: 1360
     height: 860
     visible: true
     title: qsTr("Bilibili Music Client")
     color: "#181818"
 
-    // ---- 主体布局 ----
+    // ---- 安全访问 PlayerController ----
+    // Component.onCompleted/Qt.callLater 确保 applicationContext 已就绪
+    property var _pc: null  // PlayerController 引用
+
+    Component.onCompleted: Qt.callLater(function() {
+        _pc = applicationContext ? applicationContext.playerController : null
+        console.log("[Main] playerController 就绪:", !!_pc)
+    })
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        // ========== 左侧导航栏 ==========
         Sidebar {
             id: sidebar
             Layout.fillHeight: true
             Layout.preferredWidth: 240
         }
 
-        // ========== 中间内容区 ==========
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -40,7 +45,6 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 0
 
-                // ---- 页面容器 ----
                 StackLayout {
                     id: pageStack
                     Layout.fillWidth: true
@@ -52,7 +56,7 @@ ApplicationWindow {
                     LoginPage {}
                 }
 
-                // ---- 底部播放栏（阶段二：接入 PlayerController） ----
+                // ---- 底部播放栏 ----
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 92
@@ -60,20 +64,18 @@ ApplicationWindow {
                     border.color: "#292929"
                     border.width: 1
 
-                    // 播放栏内容布局
                     RowLayout {
                         anchors.fill: parent
                         anchors.margins: 20
                         spacing: 16
 
-                        // 封面（绑定 C++ PlayerController.mediaCover）
+                        // 封面
                         Image {
                             Layout.preferredWidth: 52
                             Layout.preferredHeight: 52
-                            source: applicationContext.playerController.mediaCover
+                            // 通过 _pc 安全访问
+                            source: _pc ? _pc.mediaCover : ""
                             fillMode: Image.PreserveAspectCrop
-
-                            // 无封面时显示默认占位图
                             Rectangle {
                                 anchors.fill: parent
                                 radius: 8
@@ -82,15 +84,13 @@ ApplicationWindow {
                             }
                         }
 
-                        // 歌曲信息（绑定 C++ PlayerController.mediaTitle）
+                        // 歌曲信息
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 4
 
                             Label {
-                                // 显示当前播放的媒体标题
-                                text: applicationContext.playerController.mediaTitle
-                                      || qsTr("未在播放")
+                                text: (_pc && _pc.mediaTitle) || qsTr("未在播放")
                                 color: "#f5f5f5"
                                 font.pixelSize: 16
                                 font.bold: true
@@ -98,8 +98,7 @@ ApplicationWindow {
                             }
 
                             Label {
-                                // 显示播放状态：Playing / Paused / Stopped
-                                text: applicationContext.playerController.playbackState === "Playing"
+                                text: _pc && _pc.playbackState === "Playing"
                                       ? qsTr("正在播放...")
                                       : qsTr("已暂停")
                                 color: "#9d9d9d"
@@ -109,13 +108,15 @@ ApplicationWindow {
 
                         // 播放/暂停按钮
                         Button {
-                            text: applicationContext.playerController.playbackState === "Playing"
+                            enabled: _pc !== null
+                            text: _pc && _pc.playbackState === "Playing"
                                   ? qsTr("暂停") : qsTr("播放")
                             onClicked: {
-                                if (applicationContext.playerController.playbackState === "Playing") {
-                                    applicationContext.playerController.pause()
+                                if (!_pc) return
+                                if (_pc.playbackState === "Playing") {
+                                    _pc.pause()
                                 } else {
-                                    applicationContext.playerController.play()
+                                    _pc.play()
                                 }
                             }
                             background: Rectangle {
@@ -124,7 +125,7 @@ ApplicationWindow {
                                 implicitWidth: 80
                                 implicitHeight: 36
                             }
-                            contentItem: Label {
+                            contentItem: Text {
                                 text: parent.text
                                 color: "#ffffff"
                                 horizontalAlignment: Text.AlignHCenter
@@ -132,13 +133,19 @@ ApplicationWindow {
                             }
                         }
 
-                        // 进度条（绑定 C++ PlayerController.position/duration）
+                        // 进度条
                         Slider {
+                            id: progressSlider
                             Layout.preferredWidth: 180
                             from: 0
-                            to: applicationContext.playerController.duration
-                            value: applicationContext.playerController.position
-                            onMoved: applicationContext.playerController.seek(value)
+                            to: (_pc && _pc.source !== "") ? _pc.duration : 0
+                            value: _pc ? _pc.position : 0
+                            enabled: _pc !== null
+                            // 只在用户释放滑块时 seek（防止绑定循环）
+                            onMoved: {
+                                if (_pc && _pc.source !== "")
+                                    _pc.seek(value)
+                            }
 
                             background: Rectangle {
                                 x: parent.leftPadding
@@ -148,8 +155,8 @@ ApplicationWindow {
                                 radius: 2
                                 color: "#3a3a3a"
                                 Rectangle {
-                                    width: parent.width * (applicationContext.playerController.position
-                                                           / Math.max(applicationContext.playerController.duration, 1))
+                                    width: parent.width * ((_pc ? _pc.position : 0)
+                                        / Math.max((_pc ? _pc.duration : 1), 1))
                                     height: parent.height
                                     color: "#fb7299"
                                     radius: 2
@@ -157,13 +164,13 @@ ApplicationWindow {
                             }
                         }
 
-                        // 音量控制（绑定 C++ PlayerController.volume 0.0-1.0）
+                        // 音量
                         Slider {
                             Layout.preferredWidth: 100
                             from: 0
                             to: 100
-                            value: applicationContext.playerController.volume * 100
-                            onMoved: applicationContext.playerController.setVolume(value / 100)
+                            value: _pc ? _pc.volume * 100 : 50
+                            onMoved: if (_pc) _pc.setVolume(value / 100)
                         }
                     }
                 }

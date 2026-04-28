@@ -10,7 +10,34 @@
 - 音频/视频流播放
 - 网易云风格三段式 UI
 
-**当前阶段**：阶段一（基础框架搭建）已完成
+**当前阶段**：阶段二（核心功能开发）已完成
+
+## 当前功能链路
+
+```
+登录（LoginPage）
+  ↓ 粘贴 Cookie → AuthService.importCookie()
+  ↓ 解析 Cookie → PersistentCookieJar 持久化到磁盘
+  ↓ 验证 → BilibiliApiClient.getNavInfo() 检查 SESSDATA 有效性
+  ↓ loginChecked 信号 → QML 显示登录结果
+  ↓
+收藏夹（FavoritesPage）
+  ↓ 加载列表 → FavoriteService.loadFavoriteFolders(mid)
+  ↓ → BilibiliApiClient.getFavoriteFolderList()
+  ↓ 显示文件夹列表（id, title, media_count）
+  ↓ 点击文件夹 → loadFavoriteResources(mediaId, page, 20)
+  ↓ → BilibiliApiClient.getFavoriteResourceList()
+  ↓ 显示资源列表（封面/标题/UP主/时长）
+  ↓ 点击资源 → 设置 PlayerController 标题/封面
+  ↓ → MediaResolver.resolve(id, type, bvid)
+  ↓ → BilibiliApiClient.getAudioStreamUrl() / getVideoPlayUrl()
+  ↓ → mediaResolved 信号 → playerController.source = url
+  ↓ → m_pendingPlay → mediaStatusChanged(BufferedMedia) → 自动播放
+  ↓
+播放器（Main.qml 底部播放栏）
+  ↓ 显示封面/标题/状态
+  ↓ 播放/暂停/进度拖动/音量控制
+```
 
 ---
 
@@ -137,30 +164,56 @@ engine.rootContext()->setContextProperty("applicationContext", &applicationConte
 // ApplicationContext.h
 Q_PROPERTY(QString appName READ appName CONSTANT)
 Q_PROPERTY(QString qtVersion READ qtVersion CONSTANT)
+Q_PROPERTY(AuthService *authService READ authService CONSTANT)
+Q_PROPERTY(PlayerController *playerController READ playerController CONSTANT)
 ```
 
 - `Q_PROPERTY` 将 C++ 成员变量/方法暴露给 QML
 - `CONSTANT` 修饰符告诉 QML 该属性不会变化，可缓存
-- 使用场景：QML 只读显示 C++ 数据
+- 使用场景：QML 只读显示 C++ 数据，或获取服务指针后调用其方法
 
-#### 交互方式 3（后续阶段）：信号与槽
+#### 交互方式 3：Q_INVOKABLE 暴露方法
 
 ```cpp
-// 后续阶段通过 Q_INVOKABLE 暴露方法给 QML 调用
-// 通过信号将 C++ 异步结果通知 QML 更新界面
+// AuthService.h
+Q_INVOKABLE void checkLogin();
+Q_INVOKABLE void importCookie(const QString &cookieString);
+
+// PlayerController.h
+Q_INVOKABLE void play();
+Q_INVOKABLE void pause();
+Q_INVOKABLE void seek(int positionMs);
 ```
+
+- QML 中可直接调用：`applicationContext.authService.checkLogin()`
+- 不需要信号/槽连接，直接调用 C++ 方法
+
+#### 交互方式 4：信号通知 C++ 结果
+
+```cpp
+// C++ 发射信号
+void loginChecked(bool success, const QString &userName);
+
+// QML 中连接信号
+Component.onCompleted: Qt.callLater(function() {
+    applicationContext.authService.loginChecked.connect(function(success, userName) {...})
+})
+```
+
+- 使用 `signal.connect(function(...){})` 替代已弃用的 `Connections` 语法
+- 使用 `Qt.callLater()` 延迟初始化，避免 QML 组件初始化时 `applicationContext` 未就绪
 
 ### 4.3 数据流
 
 ```
 用户操作 -> QML 界面
-  -> 调用 C++ Q_INVOKABLE 方法（后续阶段）
-  -> AuthService / FavoriteService 等业务服务
+  -> 调用 C++ Q_INVOKABLE 方法（如 authService.importCookie()）
+  -> AuthService / FavoriteService / MediaResolver 等业务服务
   -> HttpClient 发送 HTTP 请求（自动携带 Cookie）
   -> B站 API 服务器
   -> HTTP 响应返回
   -> 解析 JSON -> 更新 C++ 数据模型
-  -> 通过信号通知 QML 更新 UI
+  -> 通过信号通知 QML 更新 UI（或直接使用 Q_PROPERTY 绑定）
 ```
 
 ---
@@ -183,6 +236,11 @@ Q_PROPERTY(QString qtVersion READ qtVersion CONSTANT)
 | `m_settings` | `AppSettings*` | 应用配置管理器 |
 | `m_cookieJar` | `PersistentCookieJar*` | Cookie 持久化管理器 |
 | `m_httpClient` | `HttpClient*` | HTTP 网络客户端 |
+| `m_bilibiliApiClient` | `BilibiliApiClient*` | B站 API 客户端 |
+| `m_authService` | `AuthService*` | 登录认证服务 |
+| `m_favoriteService` | `FavoriteService*` | 收藏夹服务 |
+| `m_mediaResolver` | `MediaResolver*` | 媒体链接解析器 |
+| `m_playerController` | `PlayerController*` | 播放器控制器 |
 
 **初始化顺序**：
 1. 构造函数中创建所有服务实例（`new Service(this)`）
@@ -316,9 +374,9 @@ cmake --build .
 
 ## 八、后续阶段规划
 
-| 阶段 | 内容 | 预计 |
+| 阶段 | 内容 | 状态 |
 |------|------|------|
-| **阶段一**（当前） | 基础框架搭建（HttpClient、CookieJar、AppSettings、三段式 UI） | 已完成 |
-| **阶段二** | 核心功能（AuthService、FavoriteService、PlayerController） | 进行中 |
-| **阶段三** | UI 美化（网易云风格、主题统一、卡片列表） | 待开始 |
-| **阶段四** | 测试与联调（单元测试、Mock 测试、手工回归） | 待开始 |
+| **阶段一** | 基础框架（HttpClient、CookieJar、AppSettings、三段式 UI） | 已完成 |
+| **阶段二** | 核心功能（AuthService、FavoriteService、PlayerController、MediaResolver） | **已完成** |
+| **阶段三** | UI 美化（网易云风格、主题统一、卡片列表、骨架屏） | 待开始 |
+| **阶段四** | 测试与联调（单元测试、Mock 数据、手工回归） | 待开始 |
