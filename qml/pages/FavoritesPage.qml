@@ -1,82 +1,46 @@
 // ============================================================================
-// FavoritesPage.qml - 收藏夹页面
-// 功能：显示收藏夹列表 → 点击文件夹显示资源列表 → 点击资源播放
-// 与 C++ 的交互：
-//   - authService:      登录态 + userMid
-//   - favoriteService:  加载文件夹列表 + 资源列表
-//   - mediaResolver:    解析播放 URL
-//   - playerController: 控制播放
+// FavoritesPage.qml - 收藏夹页面（阶段三：Theme 引用+悬停效果）
 // ============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components/Theme.js" as Theme
 
 ScrollView {
     clip: true
 
-    // ---- 页面状态 ----
     property string viewState: "folders"
     property string currentFolderTitle: ""
     property int currentMediaId: 0
 
-    // ---- 数据模型 ----
     property var folderModel: []
     property var resourceModel: []
     property bool hasMoreResources: false
 
-    // ---- 加载状态 ----
     property bool _loading: false
     property string _playError: ""
 
-    // ---- 初始化：连接 C++ 信号 ----
     Component.onCompleted: Qt.callLater(function() {
-        console.log("[FavPage] onCompleted, applicationContext=", !!applicationContext)
-
         var svc = applicationContext ? applicationContext.favoriteService : null
-        console.log("[FavPage] favoriteService=", !!svc)
         if (!svc) return
-
-        svc.favoriteFoldersLoaded.connect(function(success, foldersJson, error) {
-            console.log("[FavPage] 文件夹加载完成, success=", success,
-                        "len=", foldersJson ? foldersJson.length : 0,
-                        "error=", error)
+        svc.favoriteFoldersLoaded.connect(function(success, f, error) {
             _loading = false
-            if (success && foldersJson && foldersJson.length > 0) {
-                try { folderModel = JSON.parse(foldersJson); }
-                catch(e) { console.log("[FavPage] JSON解析失败:", e); }
-            } else {
-                console.log("[FavPage] 加载收藏夹失败:", error);
-            }
+            if (success && f && f.length > 0) { try { folderModel = JSON.parse(f); } catch(e) {} }
         })
-
-        svc.favoriteResourcesLoaded.connect(function(success, infoJson, mediasJson, hasMore, error) {
-            console.log("[FavPage] 资源加载完成, success=", success,
-                        "len=", mediasJson ? mediasJson.length : 0,
-                        "hasMore=", hasMore, "error=", error)
+        svc.favoriteResourcesLoaded.connect(function(success, info, medias, hasMore, error) {
             _loading = false
-            if (success && mediasJson && mediasJson.length > 0) {
-                try { resourceModel = JSON.parse(mediasJson); }
-                catch(e) { console.log("[FavPage] JSON解析失败:", e); }
+            if (success && medias && medias.length > 0) {
+                try { resourceModel = JSON.parse(medias); } catch(e) {}
                 hasMoreResources = hasMore
-            } else {
-                resourceModel = []
-                console.log("[FavPage] 加载收藏内容失败:", error);
-            }
+            } else { resourceModel = []; }
         })
-
         var res = applicationContext.mediaResolver
-        console.log("[FavPage] mediaResolver=", !!res)
         if (res) {
             res.mediaResolved.connect(function(success, url, t, c, d, error) {
-                console.log("[FavPage] mediaResolved signal! success=", success,
-                            "url.length=", url ? url.length : 0, "error=", error)
                 if (success && url && url.length > 0) {
-                    console.log("[FavPage] 设置播放源:", url.substring(0, 60) + "...")
                     applicationContext.playerController.source = url
-                } else {
-                    _playError = qsTr("播放失败: ") + error
-                }
+                } else { _playError = qsTr("播放失败: ") + error; }
             })
         }
     })
@@ -84,61 +48,49 @@ ScrollView {
     Rectangle {
         implicitWidth: 900
         implicitHeight: contentColumn.implicitHeight + 48
-        color: "#202020"
+        color: Theme.colors.bgContent
 
         ColumnLayout {
             id: contentColumn
-
-            anchors.left: parent.left
-            anchors.right: parent.right
+            anchors.left: parent.left; anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 24
-            spacing: 20
+            anchors.margins: Theme.spacing.page
+            spacing: Theme.spacing.card
 
-            // ---- 标题行 ----
             RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-
+                Layout.fillWidth: true; spacing: Theme.spacing.item
                 Button {
                     text: qsTr("< 返回")
-                    visible: viewState === "resources"
-                    flat: true
+                    visible: viewState === "resources"; flat: true
                     onClicked: { viewState = "folders"; currentFolderTitle = "" }
                     background: Rectangle {
-                        color: "#3a3a3a"; radius: 8
+                        color: Theme.colors.borderInput; radius: Theme.radius.card
                         implicitWidth: 80; implicitHeight: 36
                     }
                     contentItem: Text {
-                        text: parent.text; color: "#ffffff"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        text: parent.text; color: Theme.colors.textPrimary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                 }
-
                 Label {
-                    text: viewState === "folders" ? qsTr("收藏夹")
-                          : currentFolderTitle || qsTr("收藏夹内容")
-                    color: "#ffffff"; font.pixelSize: 28; font.bold: true
+                    text: viewState === "folders" ? qsTr("收藏夹") : currentFolderTitle || qsTr("收藏夹内容")
+                    color: Theme.colors.textPrimary
+                    font.pixelSize: Theme.fontSizes.h1; font.bold: true
                     Layout.fillWidth: true
                 }
             }
 
-            // ---- 提示 ----
             Label {
                 visible: viewState === "folders"
                 text: (applicationContext && applicationContext.authService
                        && applicationContext.authService.isLoggedIn)
                       ? qsTr("已登录，点击收藏夹查看内容")
                       : qsTr("请先在「登录」页面导入 Cookie")
-                color: (applicationContext && applicationContext.authService
-                        && applicationContext.authService.isLoggedIn)
-                       ? "#bcbcbc" : "#7d7d7d"
+                color: Theme.colors.textTertiary
                 wrapMode: Text.Wrap; Layout.fillWidth: true
-                font.pixelSize: 14
+                font.pixelSize: Theme.fontSizes.bodySmall
             }
 
-            // ---- 加载按钮 ----
             Button {
                 text: qsTr("加载收藏夹列表")
                 enabled: applicationContext && applicationContext.authService
@@ -150,65 +102,55 @@ ScrollView {
                         applicationContext.authService.userMid)
                 }
                 background: Rectangle {
-                    color: parent.enabled ? "#fb7299" : "#3a3a3a"; radius: 8
-                    implicitWidth: 200; implicitHeight: 44
+                    color: parent.enabled ? Theme.colors.accent : Theme.colors.borderInput
+                    radius: Theme.radius.button
+                    implicitWidth: 200; implicitHeight: Theme.sizes.btnHeight
                 }
                 contentItem: Text {
-                    text: parent.text; color: "#ffffff"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    font.pixelSize: 14
+                    text: parent.text; color: Theme.colors.textPrimary
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    font.pixelSize: Theme.fontSizes.bodySmall
                 }
             }
 
-            // ---- 加载中 ----
             Label {
                 id: loadingLabel
                 visible: _loading
                 text: qsTr("加载中...")
-                color: "#9d9d9d"; font.pixelSize: 13
+                color: Theme.colors.textMuted; font.pixelSize: Theme.fontSizes.caption
             }
 
             // ============ 收藏夹列表 ============
             Repeater {
-                id: folderRepeater
-                model: folderModel
-                visible: viewState === "folders"
-
-                // 通过 parentRepeater.model[index] 访问模型数据
-                // 这是 Qt 6 中最可靠的模型数据访问方式
+                id: folderRepeater; model: folderModel; visible: viewState === "folders"
                 delegate: Rectangle {
                     readonly property var _item: folderRepeater.model[index] || {}
-
                     Layout.fillWidth: true
-                    implicitHeight: 80; radius: 12; color: "#262626"
+                    implicitHeight: 80; radius: Theme.radius.card
+                    color: fldMouse.containsMouse ? Theme.colors.bgCardHover : Theme.colors.bgCard
+                    Behavior on color { ColorAnimation { duration: Theme.duration.fast } }
 
                     MouseArea {
-                        anchors.fill: parent
+                        id: fldMouse; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             var mid = _item.id || 0
                             viewState = "resources"
-                            currentFolderTitle = _item.title || qsTr("收藏夹")
-                            currentMediaId = mid
-                            _loading = true
-                            resourceModel = []
+                            currentFolderTitle = _item.title || qsTr("收藏夹"); currentMediaId = mid
+                            _loading = true; resourceModel = []
                             applicationContext.favoriteService.loadFavoriteResources(mid, 1, 20)
                         }
                     }
-
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16; spacing: 4
-
+                        anchors.fill: parent; anchors.margins: Theme.spacing.section; spacing: Theme.spacing.tight
                         Label {
                             text: _item.title || qsTr("未知收藏夹")
-                            color: "#f4f4f4"; font.pixelSize: 17; font.bold: true
-                            elide: Text.ElideRight
+                            color: Theme.colors.textSecondary; font.pixelSize: Theme.fontSizes.h3
+                            font.bold: true; elide: Text.ElideRight
                         }
                         Label {
                             text: qsTr("%1 个内容").arg(_item.media_count || 0)
-                            color: "#a8a8a8"; font.pixelSize: 13
+                            color: Theme.colors.textTertiary; font.pixelSize: Theme.fontSizes.caption
                         }
                     }
                 }
@@ -216,30 +158,26 @@ ScrollView {
 
             // ============ 资源列表 ============
             Repeater {
-                id: resRepeater
-                model: resourceModel
-                visible: viewState === "resources"
-
+                id: resRepeater; model: resourceModel; visible: viewState === "resources"
                 delegate: Rectangle {
                     readonly property var _item: resRepeater.model[index] || {}
-
                     Layout.fillWidth: true
-                    implicitHeight: 100; radius: 12; color: "#262626"
+                    implicitHeight: 100; radius: Theme.radius.card
+                    color: resMouse.containsMouse ? Theme.colors.bgCardHover : Theme.colors.bgCard
+                    Behavior on color { ColorAnimation { duration: Theme.duration.fast } }
 
                     MouseArea {
-                        anchors.fill: parent
+                        id: resMouse; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (_item.attr !== undefined && _item.attr !== 0) {
                                 _playError = qsTr("该资源已失效"); return
                             }
-                            applicationContext.playerController.mediaTitle =
-                                _item.title || qsTr("未知标题")
-                            applicationContext.playerController.mediaCover =
-                                _item.cover || ""
-                            if (_item.type === 12) {
+                            applicationContext.playerController.mediaTitle = _item.title || qsTr("未知标题")
+                            applicationContext.playerController.mediaCover = _item.cover || ""
+                            if (_item.type === 12)
                                 applicationContext.mediaResolver.resolve(_item.id, 12)
-                            } else {
+                            else {
                                 var bv = _item.bvid || _item.bv_id || ""
                                 applicationContext.mediaResolver.resolve(_item.id, 2, bv, 0)
                             }
@@ -247,70 +185,61 @@ ScrollView {
                     }
 
                     RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 12; spacing: 12
+                        anchors.fill: parent; anchors.margins: Theme.spacing.item; spacing: Theme.spacing.item
 
-                        // 封面
                         Rectangle {
-                            Layout.preferredWidth: 76; Layout.preferredHeight: 76
-                            radius: 8; clip: true; color: "#3a3a3a"
-
+                            Layout.preferredWidth: Theme.sizes.coverMedium
+                            Layout.preferredHeight: Theme.sizes.coverMedium
+                            radius: Theme.radius.cover; clip: true
+                            color: Theme.colors.bgPlaceholder
                             Image {
-                                anchors.fill: parent
-                                source: _item.cover || ""
+                                anchors.fill: parent; source: _item.cover || ""
                                 fillMode: Image.PreserveAspectCrop
                             }
                             Label {
                                 anchors.centerIn: parent
                                 text: _item.type === 12 ? "♪" : "▶"
-                                color: "#7d7d7d"; font.pixelSize: 24
+                                color: Theme.colors.textDim; font.pixelSize: 24
                                 visible: parent.children[0].status !== Image.Ready
                             }
                         }
 
-                        // 信息
                         ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 4
-
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignVCenter
+                            spacing: Theme.spacing.tight
                             Label {
                                 text: _item.title || qsTr("未知标题")
-                                color: "#f4f4f4"; font.pixelSize: 15; font.bold: true
-                                elide: Text.ElideRight; Layout.fillWidth: true
+                                color: Theme.colors.textSecondary; font.pixelSize: Theme.fontSizes.body
+                                font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true
                             }
                             Label {
                                 text: (_item.upper && _item.upper.name) || ""
-                                color: "#a8a8a8"; font.pixelSize: 12
+                                color: Theme.colors.textTertiary; font.pixelSize: Theme.fontSizes.small
                                 visible: text.length > 0
                             }
                             Label {
                                 text: {
-                                    var dur = _item.duration || 0
-                                    var m = Math.floor(dur / 60)
-                                    var s = dur % 60
+                                    var dur = _item.duration || 0; var m = Math.floor(dur / 60); var s = dur % 60
                                     return (_item.type === 12 ? qsTr("音频") : qsTr("视频"))
                                            + " · " + m + ":" + (s < 10 ? "0" : "") + s
                                 }
-                                color: "#7d7d7d"; font.pixelSize: 12
+                                color: Theme.colors.textDim; font.pixelSize: Theme.fontSizes.small
                             }
                         }
                     }
                 }
             }
 
-            // ---- 播放错误 ----
             Label {
                 text: _playError
-                color: "#fb7299"; font.pixelSize: 13
+                color: Theme.colors.error; font.pixelSize: Theme.fontSizes.caption
                 visible: text.length > 0
             }
 
-            // ---- 空列表 ----
             Label {
                 visible: viewState === "resources" && resourceModel.length === 0 && !_loading
                 text: qsTr("该收藏夹暂无内容")
-                color: "#7d7d7d"; font.pixelSize: 13
+                color: Theme.colors.textDim; font.pixelSize: Theme.fontSizes.caption
                 Layout.alignment: Qt.AlignHCenter
             }
         }

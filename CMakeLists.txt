@@ -35,6 +35,7 @@ qt_add_qml_module(appcursor_music
     QML_FILES
         qml/Main.qml
         qml/components/Sidebar.qml
+        qml/components/Theme.js
         qml/pages/HomePage.qml
         qml/pages/FavoritesPage.qml
         qml/pages/LoginPage.qml

@@ -1,126 +1,115 @@
 // ============================================================================
-// Sidebar.qml - 侧边导航栏
-// 功能：应用主导航菜单，点击切换内容区页面
-// 与 C++ 的交互：通过 applicationContext.qtVersion 读取 Qt 版本
-// 向父组件暴露：
-//   - currentIndex: 当前选中项索引（被 Main.qml 的 StackLayout 绑定）
-//   - navigationRequested 信号（通知父组件页面切换事件）
+// Sidebar.qml - 侧边导航栏（阶段三：用户信息+悬停动画）
 // ============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "Theme.js" as Theme
 
 Rectangle {
     id: sidebar
 
-    // ---- 对外暴露的属性 ----
-    /** @brief 当前选中导航项的索引（0=首页，1=收藏夹，2=登录） */
     property int currentIndex: 0
-
-    /** @brief 导航请求信号（父组件可监听此信号执行额外逻辑） */
     signal navigationRequested(int index)
 
-    color: "#111111"  // 侧边栏背景色（最深色，与内容区形成对比）
+    color: Theme.colors.bgSidebar
 
-    // ---- 侧边栏内容垂直布局 ----
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 18
+        anchors.margins: Theme.spacing.card
+        spacing: Theme.spacing.section
 
-        // 应用标题
+        // ---- 品牌标题 ----
         Label {
             text: qsTr("Bili Music")
-            color: "#ffffff"
-            font.pixelSize: 24
-            font.bold: true
+            color: Theme.colors.textPrimary
+            font.pixelSize: 24; font.bold: true
         }
-
-        // 阶段标识（粉色文字 #fb7299 = B站品牌色）
         Label {
-            text: qsTr("阶段二 · 核心功能")
-            color: "#fb7299"
-            font.pixelSize: 13
+            text: qsTr("阶段三 · UI 美化")
+            color: Theme.colors.accent
+            font.pixelSize: Theme.fontSizes.caption
         }
 
-        // ---- 导航菜单项目 ----
-        // Repeater 根据 model 数组动态生成导航项
-        // 每个项点击时更新 currentIndex 并触发 navigationRequested 信号
-        Repeater {
-            model: [
-                qsTr("首页"),       // 索引 0
-                qsTr("收藏夹"),    // 索引 1
-                qsTr("登录")       // 索引 2
-            ]
+        // ---- 用户信息（登录后） ----
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 56; radius: Theme.radius.button
+            color: applicationContext && applicationContext.authService
+                   && applicationContext.authService.isLoggedIn
+                   ? Theme.colors.bgCard : "transparent"
+            visible: applicationContext && applicationContext.authService
+                     && applicationContext.authService.isLoggedIn
 
-            // 每个导航项的委托（delegate）
-            delegate: Rectangle {
-                // required property: 从 Repeater 隐式提供的模型数据
-                required property string modelData  // 当前项的文本（"首页"/"收藏夹"/"登录"）
-                required property int index         // 当前项的索引（0/1/2）
-
-                Layout.fillWidth: true
-                implicitHeight: 40
-                radius: 8
-
-                // 高亮效果：当前选中项使用 #252525 背景
-                color: sidebar.currentIndex === index ? "#252525" : "transparent"
-
-                // ---- 左侧选中指示条 ----
-                // 当前选中项显示粉色竖条（#fb7299 = B站品牌色）
+            RowLayout {
+                anchors.fill: parent; anchors.margins: 10; spacing: 10
                 Rectangle {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 3
-                    height: 20
-                    radius: 1.5
-                    color: sidebar.currentIndex === index ? "#fb7299" : "transparent"
-                    anchors.leftMargin: 0
+                    Layout.preferredWidth: 36; Layout.preferredHeight: 36
+                    radius: 18; color: Theme.colors.accent
+                    Label {
+                        anchors.centerIn: parent
+                        text: applicationContext && applicationContext.authService
+                              ? (applicationContext.authService.userName || "U")[0].toUpperCase() : "U"
+                        color: Theme.colors.textPrimary; font.bold: true; font.pixelSize: 14
+                    }
                 }
-
-                // 菜单标签
-                Label {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: 14
-                    text: parent.modelData
-                    // 选中项文字白色，未选中项灰色
-                    color: sidebar.currentIndex === index ? "#ffffff" : "#dddddd"
-                    font.pixelSize: 14
-                }
-
-                // ---- 点击交互 ----
-                // MouseArea 覆盖整项，处理点击事件
-                // cursorShape: Qt.PointingHandCursor 显示手型光标
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        // 更新当前选中项索引（驱动 StackLayout 页面切换）
-                        sidebar.currentIndex = index
-                        // 发射导航信号（供父组件监听）
-                        sidebar.navigationRequested(index)
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: 2
+                    Label {
+                        text: applicationContext && applicationContext.authService
+                              ? applicationContext.authService.userName : ""
+                        color: Theme.colors.textSecondary; font.pixelSize: Theme.fontSizes.bodySmall
+                        font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true
+                    }
+                    Label {
+                        text: qsTr("已登录"); color: Theme.colors.accent
+                        font.pixelSize: Theme.fontSizes.small
                     }
                 }
             }
         }
 
-        // ---- 底部弹性空间 ----
-        // Item 会自动填充剩余垂直空间，将底部信息推到最下方
-        Item {
-            Layout.fillHeight: true
+        // ---- 导航项目 ----
+        ColumnLayout { Layout.fillWidth: true; spacing: 4
+            Repeater {
+                model: [
+                    { label: qsTr("首页"), icon: "" },
+                    { label: qsTr("收藏夹"), icon: "📂" },
+                    { label: qsTr("登录"), icon: "🔑" }
+                ]
+                delegate: Rectangle {
+                    required property var modelData; required property int index
+                    Layout.fillWidth: true; implicitHeight: Theme.sizes.navItemHeight
+                    radius: Theme.radius.button
+                    color: sidebar.currentIndex === index ? Theme.colors.bgCard
+                         : navMouse.containsMouse ? Theme.colors.bgCardHover : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.duration.fast } }
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 12; spacing: 10
+                        Label { text: modelData.icon; font.pixelSize: 16 }
+                        Label {
+                            text: modelData.label
+                            color: sidebar.currentIndex === index ? Theme.colors.textPrimary : Theme.colors.textMuted
+                            font.pixelSize: Theme.fontSizes.bodySmall
+                            font.bold: sidebar.currentIndex === index
+                        }
+                    }
+                    MouseArea {
+                        id: navMouse; anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: { sidebar.currentIndex = index; sidebar.navigationRequested(index) }
+                    }
+                }
+            }
         }
 
-        // ---- 底部版本信息 ----
-        // 展示当前 Qt 版本和运行状态
-        // applicationContext 是 C++ 暴露给 QML 的全局属性
+        Item { Layout.fillHeight: true }
+
         Label {
-            text: qsTr("Qt %1 / 应用已就绪").arg(applicationContext.qtVersion)
-            color: "#7d7d7d"
-            font.pixelSize: 12
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
+            text: qsTr("Qt %1 / 哔哩哔哩音乐客户端").arg(applicationContext ? applicationContext.qtVersion : "")
+            color: Theme.colors.textDim; font.pixelSize: Theme.fontSizes.small
+            wrapMode: Text.Wrap; Layout.fillWidth: true
         }
     }
 }
