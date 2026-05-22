@@ -38,6 +38,11 @@ qt_add_qml_module(appcursor_music
         qml/Main.qml
         qml/components/Sidebar.qml
         qml/components/Theme.js
+        qml/components/AppButton.qml
+        qml/components/CoverImage.qml
+        qml/components/MediaCard.qml
+        qml/components/PlayerBar.qml
+        qml/components/PlaylistPopup.qml
         qml/pages/HomePage.qml
         qml/pages/FavoritesPage.qml
         qml/pages/LoginPage.qml
