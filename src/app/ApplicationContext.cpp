@@ -22,6 +22,7 @@
 #include "bilibili/FavoriteService.h"    // 收藏夹服务
 #include "player/MediaResolver.h"        // 媒体解析器
 #include "player/PlayerController.h"     // 播放器控制器
+#include "bilibili/MusicService.h"       // 音乐区服务
 
 /**
  * @brief 构造函数
@@ -57,6 +58,8 @@ ApplicationContext::ApplicationContext(QObject *parent)
     , m_mediaResolver(new MediaResolver(m_bilibiliApiClient, this))
     // PlayerController 独立，内部创建 QMediaPlayer + QAudioOutput
     , m_playerController(new PlayerController(this))
+    // MusicService 依赖 BilibiliApiClient（获取音乐榜单数据）
+    , m_musicService(new MusicService(m_bilibiliApiClient, this))
 {
 }
 
@@ -118,6 +121,12 @@ MediaResolver *ApplicationContext::mediaResolver() const
 PlayerController *ApplicationContext::playerController() const
 {
     return m_playerController;
+}
+
+/** @return 音乐区服务指针 */
+MusicService *ApplicationContext::musicService() const
+{
+    return m_musicService;
 }
 
 /**

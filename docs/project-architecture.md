@@ -337,9 +337,19 @@ void PersistentCookieJar::setCookieString(const QString &cookieString) {
 
 **位置**：`src/auth/AuthService.h/.cpp`
 
-**暴露给 QML 的属性**：`isLoggedIn`、`userName`、`userAvatar`、`userMid`
+**暴露给 QML 的属性**：
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `isLoggedIn` | bool | 是否已登录（Cookie 存在 + nav 接口验证通过） |
+| `userName` | QString | 当前登录用户昵称 |
+| `userAvatar` | QString | 当前登录用户头像 URL |
+| `userMid` | qint64 | 当前登录用户 mid（唯一标识） |
+| `qrImageUrl` | QString | 扫码登录二维码图片 URL（空=无二维码） |
+| `qrStatus` | QString | 扫码状态文字（"请扫描..." / "已扫码..." / "登录成功！"） |
+| `qrLoginActive` | bool | 是否正在进行扫码登录流程（定时器是否在轮询） |
 
-**登录验证**：调用 `BilibiliApiClient::getNavInfo()` → B站 `/x/web-interface/nav` 接口。如果返回 `code=0` 且 `data.isLogin=true`，说明 Cookie 有效。
+**登录验证（Cookie 登录 + 扫码登录共用）**：
+调用 `BilibiliApiClient::getNavInfo()` → B站 `/x/web-interface/nav` 接口。
 
 ```cpp
 void AuthService::checkLogin() {
@@ -356,6 +366,84 @@ void AuthService::checkLogin() {
 }
 ```
 
+#### 6.4.1 Cookie 导入登录
+
+用户从浏览器复制 Cookie 字符串，粘贴到输入框中调用 `importCookie(cookieString)`：
+
+```
+用户粘贴 Cookie 字符串
+  → importCookie("SESSDATA=xxx; bili_jct=yyy; ...")
+  → PersistentCookieJar::setCookieString()
+    → 按分号分割 key=value
+    → 创建 QNetworkCookie，设置 Domain=.bilibili.com
+    → insertCookie() + save() 持久化
+  → checkLogin() → 验证 Cookie 有效性
+  → emit loginChecked(success, userName)
+```
+
+#### 6.4.2 扫码登录（QR Code Login）
+
+扫码登录通过 B站官方扫码登录 API 实现，无需手动输入 Cookie。
+
+**调用的 B站 API 端点**：
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/x/passport-login/web/qrcode/generate` | GET | 生成二维码，返回 `url` 和 `qrcode_key` |
+| `/x/passport-login/web/qrcode/poll` | GET | 轮询扫码状态，参数 `qrcode_key` |
+
+**扫码登录状态机**：
+
+```
+用户点击"获取二维码"
+  → startQrLogin()
+    → 递增 m_qrGenerationId（防竞态）
+    → BilibiliApiClient::generateQrCode()
+      → GET qrcode/generate
+      → 返回 {url, qrcode_key}
+    → 构造二维码图片 URL:
+      "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" + encodeURIComponent(url)
+    → 启动 QTimer（每 2 秒）
+      → pollQrLoginStatus()
+        → BilibiliApiClient::pollQrCode(key)
+          → GET qrcode/poll?qrcode_key=xxx
+          → 解析嵌套 JSON（data.code 才是扫码状态）
+            ├─ data.code = 86101 → 未扫码，静默等待
+            ├─ data.code = 86090 → 已扫码待确认，更新 UI
+            ├─ data.code = 86038 → 二维码过期，停止轮询
+            ├─ data.code = 0     → 登录成功！
+            │   → PersistentCookieJar 自动捕获 Set-Cookie
+            │   → save() 持久化到磁盘
+            │   → checkLogin() 获取用户信息
+            └─ 负数              → 网络错误
+```
+
+**轮询状态码速查表**：
+| 状态码 | 含义 | UI 行为 |
+|--------|------|---------|
+| `86101` | 未扫码 | 静默等待，不更新 UI |
+| `86090` | 已扫码，等待确认 | 显示"已扫码，请在手机上确认登录"（橙色） |
+| `86038` | 二维码已过期 | 显示红色提示，停止定时器 |
+| `0` | 登录成功 | 显示绿色，保存 Cookie，调用 checkLogin |
+| 负数 | 网络错误 | 显示错误信息 |
+
+**关键设计决策**：
+
+1. **独立 QNetworkReply 连接**：`BilibiliApiClient::pollQrCode` 不使用 `getJson()`，而是直接创建
+   `QNetworkReply::finished` 连接。原因：轮询每 2 秒一次，若与其他并发请求共用全局信号
+   会导致响应窜扰——一个请求的回调可能收到另一个请求的响应。
+
+2. **m_qrGenerationId 防竞态**：每次调用 `startQrLogin()` 递增一个 ID。异步回调时检查
+   `genId == m_qrGenerationId`，不匹配则丢弃。解决"用户快速多次点击获取二维码"时
+   旧回调覆盖新状态的竞态。
+
+3. **嵌套 JSON 解析**：B站 poll API 返回 `{code: 0, data: {code: 86101, message: "..."}}`，
+   其中顶层 `code` 是请求处理状态（0=成功），`data.code` 才是扫码状态。
+   这是早期 Bug 的根源——直接读取顶层 code 导致未扫码时也显示"登录成功"。
+
+4. **Cookie 自动持久化**：扫码成功后 B站服务器通过 `Set-Cookie` 响应头返回
+   `SESSDATA`、`bili_jct` 等 Cookie。`PersistentCookieJar::setCookiesFromUrl()` 重写
+   自动捕获并保存到磁盘，无需手动调用 `save()`。
+
 ### 6.5 BilibiliApiClient（B站 API 封装）
 
 **位置**：`src/bilibili/BilibiliApiClient.h/.cpp`
@@ -365,6 +453,8 @@ void AuthService::checkLogin() {
 | 方法 | B站接口 | 用途 |
 |------|---------|------|
 | `getNavInfo()` | `x/web-interface/nav` | 登录态验证 |
+| `generateQrCode()` | `x/passport-login/web/qrcode/generate` | 生成扫码登录二维码 |
+| `pollQrCode(key)` | `x/passport-login/web/qrcode/poll` | 轮询扫码登录状态 |
 | `getFavoriteFolderList(mid)` | `v3/fav/folder/created/list-all` | 收藏夹列表 |
 | `getFavoriteResourceList(id, page, size)` | `v3/fav/resource/list` | 收藏夹内容 |
 | `getAudioStreamUrl(audioId)` | `audio/music-service-c/web/url` | 音频播放地址 |
@@ -475,6 +565,11 @@ dash.audio[0].baseUrl  →  纯音频轨         ✓
 | `setSourceDevice(QNetworkReply*)` 不工作 | QNetworkReply 非 seekable | 全量下载到 QBuffer 后再播放 |
 | Theme.qml 单例不被识别 | `pragma Singleton` 构建系统未处理 | 改用 `.js` pragma library |
 | `font.monospace` 属性不存在 | QML Font 类型无此属性 | 改用 `font.family: "Consolas"` |
+| GridLayout 卡片重叠 | ScrollView 内 GridLayout 初始 width=0，导致 `Layout.preferredWidth` 计算为 0 | 计算固定像素值：`(900-2*24-2*20)/3` 赋给 `property int cardW` |
+| 扫码：未扫码却显示"登录成功" | B站 poll API 返回嵌套 JSON `{code:0, data:{code:86101}}`，直接读顶层 code 始终为 0 | 先检查 `data.code`，仅当 `data` 含 `url`/`refresh_token` 且顶层 `code=0` 时才算成功 |
+| 扫码：确认后不登录 | pollQrCode 使用 `getJson()` 复用了全局信号，响应被其他 getJson 的回调误收 | pollQrCode 改用独立 `QNetworkReply::finished` 连接，1:1 绑定回调 |
+| 扫码：多次点击按钮状态错乱 | 旧异步回调覆盖了新请求的状态 | `m_qrGenerationId` 递增 + 回调中 genId 匹配检查 |
+| QR 码图片只显示下半部分 | `implicitHeight: qrCard.implicitHeight` 返回 0（Rectangle 无此属性） | 改用 `qrCard.height`（值为 `qrLayout.implicitHeight + 40`） |
 
 ---
 
@@ -535,7 +630,7 @@ mingw32-make -j4
 |------|------|
 | 音乐区首页 | 调用 B站音乐区推荐接口，展示热门音频 |
 | 播放列表/队列 | 支持连续播放、随机、循环 |
-| 扫码登录 | 生成二维码扫码登录（比 Cookie 导入更便捷） |
+| ~~扫码登录~~ | ✅ 已实现（详见 6.4.2 扫码登录） |
 | 歌词显示 | 解析 LRC 歌词文件并同步显示 |
 | 下载管理 | 将音频下载到本地文件 |
 | Linux/macOS 支持 | 跨平台编译和适配 |

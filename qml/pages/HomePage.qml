@@ -1,90 +1,135 @@
 // ============================================================================
-// HomePage.qml - 首页
-// 功能：项目结构和开发进度的概览展示页
-// 与 C++ 的交互：通过 applicationContext.qtVersion 读取 Qt 版本号
+// HomePage.qml - 首页（阶段三：B站音乐区热门推荐 3列网格卡片）
 // ============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components/Theme.js" as Theme
 
-// ScrollView：可滚动的视图容器，当内容超出高度时可滚动查看
 ScrollView {
-    clip: true  // 裁剪超出部分，防止内容溢出
+    clip: true
+
+    property var musicModel: []
+    property bool _loading: false
+
+    // 信号连接 + 自动加载
+    Component.onCompleted: Qt.callLater(function() {
+        var svc = applicationContext ? applicationContext.musicService : null
+        if (!svc) return
+        svc.musicRankLoaded.connect(function(success, json, error) {
+            _loading = false
+            if (success && json && json.length > 0) {
+                try { musicModel = JSON.parse(json) } catch(e) {}
+            }
+        })
+        loadMusic()
+    })
+
+    function loadMusic() { _loading = true; musicModel = []; applicationContext.musicService.loadMusicRank(1, 6) }
+
+    function fmtDur(sec) {
+        var m = Math.floor(sec / 60), s = sec % 60
+        return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
+    }
+
+    // 3列卡片宽度计算: (900 - 2*24边距 - 2*20卡片间距) / 3 = ~270
+    property int cardW: (900 - 2 * Theme.spacing.page - 2 * Theme.spacing.card) / 3
 
     Rectangle {
-        // implicitWidth/Height：建议尺寸，ScrollView 会根据内容自适应
         implicitWidth: 900
         implicitHeight: contentColumn.implicitHeight + 48
-        color: "#202020"
+        color: Theme.colors.bgContent
 
-        // ---- 内容列布局 ----
         ColumnLayout {
             id: contentColumn
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            anchors.margins: Theme.spacing.page; spacing: Theme.spacing.card
 
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 24
-            spacing: 20
-
-            // 页面标题
             Label {
-                text: qsTr("开发环境与目录结构已确认")
-                color: "#ffffff"
-                font.pixelSize: 28
-                font.bold: true
+                text: qsTr("B站音乐区热门")
+                color: Theme.colors.textPrimary; font.pixelSize: Theme.fontSizes.h1; font.bold: true
             }
 
-            // Qt 版本信息（从 C++ ApplicationContext 读取）
-            Label {
-                // .arg() = QML 的字符串格式化，将 Qt 版本号填入 %1 位置
-                text: qsTr("当前基线：Qt %1，C++17，CMake 已预留 Network / Multimedia / QuickControls2 / Svg 模块。")
-                    .arg(applicationContext.qtVersion)
-                color: "#bcbcbc"
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
+            Button {
+                text: qsTr("加载热门音乐")
+                visible: musicModel.length === 0 && !_loading
+                onClicked: loadMusic()
+                background: Rectangle {
+                    color: Theme.colors.accent; radius: Theme.radius.button
+                    implicitWidth: 180; implicitHeight: Theme.sizes.btnHeight
+                }
+                contentItem: Text {
+                    text: parent.text; color: Theme.colors.textPrimary
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    font.pixelSize: Theme.fontSizes.bodySmall
+                }
             }
 
-            // ---- 模块卡片列表 ----
-            // Repeater 根据模型数组动态生成信息卡片
-            Repeater {
-                model: [
-                    // title: 模块名称，desc: 模块功能描述
-                    { "title": qsTr("src/app"), "desc": qsTr("应用上下文、依赖装配与后续全局服务入口") },
-                    { "title": qsTr("src/network"), "desc": qsTr("通用 HTTP 客户端，支持 GET/POST、超时、自定义 Header") },
-                    { "title": qsTr("src/storage"), "desc": qsTr("持久化 CookieJar 与 AppSettings 配置读写") },
-                    { "title": qsTr("qml/components"), "desc": qsTr("可复用 UI 组件，如侧边栏、播放栏、卡片") },
-                    { "title": qsTr("qml/pages"), "desc": qsTr("页面级视图，如首页、收藏页、登录页") }
-                ]
+            Label {
+                visible: _loading
+                text: qsTr("加载中..."); color: Theme.colors.textMuted
+                font.pixelSize: Theme.fontSizes.caption
+            }
 
-                // 卡片委托
-                delegate: Rectangle {
-                    required property var modelData  // 当前卡片的标题+描述对象
+            // 3 列网格：固定每列宽度 = cardW，GridLayout 自动换行
+            GridLayout {
+                id: musicGrid; columns: 3
+                rowSpacing: Theme.spacing.card; columnSpacing: Theme.spacing.card
+                visible: musicModel.length > 0
 
-                    Layout.fillWidth: true
-                    implicitHeight: 88
-                    radius: 12
-                    color: "#262626"
+                Repeater {
+                    model: musicModel
+                    delegate: Rectangle {
+                        readonly property var _item: musicModel[index] || {}
+                        Layout.preferredWidth: cardW
+                        implicitHeight: cardCol.implicitHeight + 32
+                        radius: Theme.radius.card
+                        color: cardMouse.containsMouse ? Theme.colors.bgCardHover : Theme.colors.bgCard
+                        Behavior on color { ColorAnimation { duration: Theme.duration.fast } }
 
-                    Column {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 6
-
-                        Label {
-                            text: parent.parent.modelData.title
-                            color: "#f4f4f4"
-                            font.pixelSize: 17
-                            font.bold: true
+                        MouseArea {
+                            id: cardMouse; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                applicationContext.playerController.mediaTitle = _item.title || qsTr("未知")
+                                applicationContext.playerController.mediaCover = _item.cover || ""
+                                applicationContext.mediaResolver.resolve(_item.id, 12)
+                            }
                         }
 
-                        Label {
-                            text: parent.parent.modelData.desc
-                            color: "#a8a8a8"
-                            font.pixelSize: 13
-                            wrapMode: Text.Wrap
-                            width: parent.width
+                        ColumnLayout {
+                            id: cardCol
+                            anchors.fill: parent; anchors.margins: Theme.spacing.item
+                            spacing: Theme.spacing.compact
+
+                            Rectangle {
+                                Layout.fillWidth: true; Layout.preferredHeight: Layout.preferredWidth * 0.6
+                                radius: Theme.radius.cover; clip: true; color: Theme.colors.bgPlaceholder
+                                Image {
+                                    anchors.fill: parent; source: _item.cover || ""
+                                    fillMode: Image.PreserveAspectCrop
+                                }
+                                Label {
+                                    anchors.centerIn: parent; text: "♪"
+                                    color: Theme.colors.textDim; font.pixelSize: 32
+                                    visible: parent.children[0].status !== Image.Ready
+                                }
+                            }
+
+                            Label {
+                                text: _item.title || qsTr("未知歌曲")
+                                color: Theme.colors.textSecondary; font.pixelSize: Theme.fontSizes.body
+                                font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true; maximumLineCount: 1
+                            }
+                            Label {
+                                text: _item.artist || ""; color: Theme.colors.textTertiary
+                                font.pixelSize: Theme.fontSizes.caption; visible: text.length > 0
+                            }
+                            Label {
+                                text: fmtDur(_item.duration || 0); color: Theme.colors.textDim
+                                font.pixelSize: Theme.fontSizes.small; font.family: "Consolas"
+                            }
                         }
                     }
                 }

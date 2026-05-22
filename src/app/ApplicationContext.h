@@ -20,6 +20,7 @@
 #include "bilibili/FavoriteService.h"
 #include "player/MediaResolver.h"
 #include "player/PlayerController.h"
+#include "bilibili/MusicService.h"
 
 /**
  * @brief 全局应用上下文（ApplicationContext）
@@ -51,6 +52,7 @@ class ApplicationContext : public QObject
     Q_PROPERTY(FavoriteService *favoriteService READ favoriteService CONSTANT) // 收藏夹服务
     Q_PROPERTY(MediaResolver *mediaResolver READ mediaResolver CONSTANT) // 媒体解析器
     Q_PROPERTY(PlayerController *playerController READ playerController CONSTANT) // 播放器
+    Q_PROPERTY(MusicService *musicService READ musicService CONSTANT) // 音乐区服务
 
 public:
     /**
@@ -103,6 +105,9 @@ public:
     /** @return 播放器控制器指针（QML 可直接绑定属性） */
     PlayerController *playerController() const;
 
+    /** @return 音乐区服务指针（QML 可直接调用） */
+    MusicService *musicService() const;
+
     /**
      * @brief 初始化各服务
      *
@@ -126,4 +131,5 @@ private:
     FavoriteService *m_favoriteService;    // 收藏夹服务
     MediaResolver *m_mediaResolver;        // 媒体解析器
     PlayerController *m_playerController;  // 播放器控制器
+    MusicService *m_musicService;          // 音乐区服务
 };

@@ -28,6 +28,7 @@ qt_add_executable(appcursor_music
     src/bilibili/FavoriteService.cpp
     src/player/MediaResolver.cpp
     src/player/PlayerController.cpp
+    src/bilibili/MusicService.cpp
 )
 
 qt_add_qml_module(appcursor_music

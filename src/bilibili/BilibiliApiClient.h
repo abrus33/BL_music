@@ -62,6 +62,67 @@ public:
      */
     void checkCookieRefresh(std::function<void(bool needRefresh, qint64 timestamp)> callback);
 
+    /**
+     * @brief 生成扫码登录二维码
+     *
+     * API: GET https://passport.bilibili.com/x/passport-login/web/qrcode/generate
+     * 无需登录态即可调用
+     *
+     * 成功返回 data 包含：
+     *   - url:          B站扫码链接（如 https://passport.bilibili.com/h5-app/...）
+     *                   此 URL 不可直接显示为二维码图片，需通过在线服务编码为图片
+     *   - qrcode_key:   用于后续轮询的临时密钥（约32字符），有效期约3分钟
+     *
+     * 返回格式示例：
+     *   { "code": 0, "data": {
+     *       "url": "https://passport.bilibili.com/h5-app/passport-login/scan?navhide=1&qrcode_key=xxx",
+     *       "qrcode_key": "a1b2c3d4e5f6..."
+     *   }}
+     *
+     * 内部实现：
+     *   调用 getJson() → 独立 QNetworkReply 连接，不与全局信号混淆
+     *
+     * @param callback 回调 (success, url, qrcodeKey, error)
+     *                 success=false 表示网络错误或 B站返回 code≠0
+     */
+    void generateQrCode(std::function<void(bool success, QString url, QString qrcodeKey, QString error)> callback);
+
+    /**
+     * @brief 轮询扫码登录状态
+     *
+     * API: GET https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={key}
+     * 无需登录态即可调用
+     *
+     * B站 poll API 使用嵌套 JSON 格式:
+     *   { "code": 0, "data": { "code": <状态码>, "message": "<描述>" } }
+     *
+     * 注意：顶层 code 是请求处理状态（0=成功），data.code 才是扫码状态。
+     * 本方法内部已处理嵌套解析，回调的 statusCode 参数直接是扫码状态码。
+     *
+     * 返回状态码含义：
+     *   =============================================================================
+     *   86101  — 未扫码           用户还没用 APP 扫码，继续轮询
+     *   86090  — 已扫码待确认      用户在 APP 扫了码，但还没点"确认登录"
+     *   86038  — 二维码已过期     有效期约 3 分钟，需重新生成
+     *   0      — 扫码登录成功      用户在手机上确认了登录，
+     *                              服务器在此响应中设置了 Set-Cookie（SESSDATA 等），
+     *                              PersistentCookieJar 会自动捕获并持久化
+     *   负数   — 网络错误          DNS失败/超时/连接中断等
+     *   =============================================================================
+     *
+     * 设计决策 —— 为什么不用 getJson 而独立实现 HTTP 调用：
+     *   轮询请求每 2 秒发送一次，如果复用 getJson，响应可能被其他并发请求的
+     *   监听器误收（getJson 的信号路由问题）。独立创建 QNetworkReply 连接，
+     *   确保回调直达正确的调用方，从根本上避免信号窜扰。
+     *
+     * @param qrcodeKey 从 generateQrCode 获取的 qrcode_key
+     * @param callback  回调 (statusCode, errorMsg)
+     *                  statusCode: B站扫码状态码（0/86101/86090/86038/负数）
+     *                  errorMsg:   仅在 statusCode<0 时有值
+     */
+    void pollQrCode(const QString &qrcodeKey,
+                    std::function<void(int statusCode, QString errorMsg)> callback);
+
     // ==================== 收藏夹相关 API ====================
 
     /**
@@ -90,6 +151,22 @@ public:
      */
     void getFavoriteResourceList(qint64 mediaId, int page, int pageSize,
         std::function<void(bool success, QJsonObject info, QJsonArray medias, bool hasMore, QString error)> callback);
+
+    // ==================== 音乐区 API ====================
+
+    /**
+     * @brief 获取热门音乐榜单（含音频预处理列表）
+     *
+     * API: GET https://www.bilibili.com/audio/music-service-c/web/menu/rank
+     * 无需登录
+     * 返回榜单列表，每项含 audios[] 数组（音频id/标题/时长）
+     *
+     * @param page     页码
+     * @param pageSize 每页数量
+     * @param callback 回调 (success, jsonArray, error)
+     */
+    void getMusicRank(int page, int pageSize,
+        std::function<void(bool, QJsonArray, QString)> callback);
 
     // ==================== 音频/视频流 API ====================
 

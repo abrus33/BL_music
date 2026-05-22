@@ -20,13 +20,14 @@ src/
 ├── storage/
 │   ├── AppSettings               QSettings INI配置存储
 │   └── PersistentCookieJar       Cookie磁盘读写
-├── auth/AuthService              登录/退出/Cookie导入
+├── auth/AuthService              登录/退出/Cookie导入/扫码登录(QR)
 ├── bilibili/
-│   ├── BilibiliApiClient         B站REST API（nav/收藏夹/音频视频流/WBI签名）
+│   ├── BilibiliApiClient         B站REST API（nav/扫码/收藏夹/音频视频流/WBI签名）
 │   └── FavoriteService           收藏夹列表+内容加载服务
 └── player/
     ├── PlayerController          QMediaPlayer+QAudioOutput封装（播放/暂停/进度/音量）
-    └── MediaResolver             音频/视频URL解析
+    ├── MediaResolver             音频/视频URL解析
+    └── MusicService              音乐区热门榜单服务
 
 qml/
 ├── Main.qml                      三段式主窗口（导航+内容+播放栏）
@@ -36,7 +37,7 @@ qml/
 └── pages/
     ├── HomePage.qml              项目概览首页
     ├── FavoritesPage.qml         收藏夹（文件夹列表→资源列表→播放）
-    └── LoginPage.qml             Cookie登录（输入框+导入+状态显示）
+    └── LoginPage.qml             Cookie登录 + 扫码登录（SwipeView切换）
 ```
 
 ## 功能状态
@@ -44,7 +45,9 @@ qml/
 | 功能 | 状态 |
 |------|------|
 | Cookie 导入登录 + 登录态验证 | ✅ |
+| 扫码登录（QR Code） + 独立信号路由 + 防竞态 | ✅ |
 | 收藏夹列表 + 内容展示 | ✅ |
+| 首页 B站音乐区热门推荐 | ✅ |
 | 音频流解析播放（含 DASH 音频轨提取） | ✅ |
 | 播放/暂停/进度拖动/音量/时间显示 | ✅ |
 | 三段式网易云风格布局 | ✅ |

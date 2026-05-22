@@ -10,6 +10,8 @@
 #include <QJsonArray>
 #include <QUrlQuery>
 #include <QUrl>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QMap>
@@ -38,58 +40,71 @@ BilibiliApiClient::BilibiliApiClient(HttpClient *httpClient, QObject *parent)
 // ============================================================================
 
 /**
- * @brief 发送 GET 请求并解析 JSON 响应
+ * @brief 发送 GET 请求并解析 JSON 响应（核心通用方法）
  * @param apiName  API 名称（日志/错误报告用）
  * @param url      完整请求 URL
  * @param callback 回调 (success, jsonObj, errorMsg)
  *
- * 所有 B站 API 的通用调用模式：
- * 1. 通过 HttpClient::get() 发送请求
- * 2. 连接 requestFinished 信号处理响应
- * 3. 解析 JSON，检查 code 字段
- * 4. 通过 callback 返回结果
+ * **设计决策 —— 为什么不用 HttpClient::get() + requestFinished 全局信号？**
+ *
+ * HttpClient 的信号路由模式有一个致命缺陷：当多个 getJson 调用并发时
+ * （如 generateQrCode 和 checkLogin 同时活跃），两者的回调都连接到了
+ * 同一个 requestFinished 信号。如果 generateQrCode 的 code:0 响应先到达，
+ * 它可能触发 checkLogin 的回调（反之亦然），导致：
+ *   - 扫码登录成功信号被当成 nav 接口的响应处理
+ *   - 用户看到"登录成功"但实际上 Cookie 并未导入
+ *   - 不同回调的时序完全不确定
+ *
+ * **解决方案：独立 QNetworkReply 连接**
+ * 不再经过 HttpClient 的信号总线，直接使用 QNetworkAccessManager::get()
+ * 并为每个 reply 创建独占的 QNetworkReply::finished 连接。
+ * 每个请求和它的回调之间是 1:1 的绑定关系，不存在窜扰可能。
+ *
+ * **为什么仍然需要 HttpClient？**
+ * HttpClient 持有 QNetworkAccessManager 实例（含 PersistentCookieJar），
+ * 通过 m_httpClient->networkManager() 访问，确保所有请求自动携带 Cookie。
+ * 同时手动设置了必需的 HTTP Headers（User-Agent、Referer、Accept）。
  */
 void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
                                  std::function<void(bool, QJsonObject, QString)> callback)
 {
-    // 发送 GET 请求
-    m_httpClient->get(url);
+    // 直接使用 QNetworkAccessManager 创建独立请求
+    // 不再使用 HttpClient::get() + requestFinished 全局信号，
+    // 避免多个 getJson 调用之间的竞态条件（如 generateQrCode 和 checkLogin 同时活跃时，
+    // generate 的 code:0 响应会被 checkLogin 的监听器误收，反之亦然）
+    QNetworkRequest request(url);
+    request.setRawHeader("Accept", "application/json, text/plain, */*");
+    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/120.0.0.0 Safari/537.36");
+    request.setRawHeader("Referer", "https://www.bilibili.com");
 
-    // 连接信号：请求完成后处理响应
-    // 使用 QObject::connect 的 lambda 形式
-    QMetaObject::Connection *conn = new QMetaObject::Connection();
-    *conn = connect(m_httpClient, &HttpClient::requestFinished,
-                    this, [this, conn, apiName, callback](const HttpClient::Response &response) {
-        // 断开连接（一次性回调，避免重复触发）
-        disconnect(*conn);
-        delete conn;
+    QNetworkReply *reply = m_httpClient->networkManager()->get(request);
 
-        // 检查网络层是否成功
-        if (!response.success) {
-            callback(false, QJsonObject(), QStringLiteral("网络错误: ") + response.errorString);
+    QObject::connect(reply, &QNetworkReply::finished, this, [reply, apiName, callback, this]() {
+        reply->deleteLater();
+
+        int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        QByteArray body = reply->readAll();
+        bool networkOk = (reply->error() == QNetworkReply::NoError);
+
+        if (!networkOk) {
+            emit apiError(apiName, statusCode, reply->errorString());
+            callback(false, QJsonObject(), QStringLiteral("网络错误: ") + reply->errorString());
             return;
         }
 
-        // 解析 JSON 响应
-        QJsonObject json = response.json();
-        if (json.isEmpty()) {
+        QJsonDocument doc = QJsonDocument::fromJson(body);
+        if (!doc.isObject()) {
             callback(false, QJsonObject(), QStringLiteral("JSON 解析失败"));
             return;
         }
 
-        // 检查 B站 API 返回码
-        // 常见的 B站 code 值：
-        //   0    = 成功
-        //  -101  = 账号未登录
-        //  -111  = CSRF 校验失败
-        //  -400  = 请求错误
-        //  -403  = 访问权限不足
-        //   其他 = 业务错误
+        QJsonObject json = doc.object();
         int code = json.value(QStringLiteral("code")).toInt(-1);
         QString message = json.value(QStringLiteral("message")).toString();
 
         if (code != 0) {
-            // API 返回错误（但网络层面是成功的）
             if (code != -1) {
                 emit apiError(apiName, code, message);
             }
@@ -97,7 +112,6 @@ void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
             return;
         }
 
-        // 成功
         callback(true, json, QString());
     });
 }
@@ -155,6 +169,137 @@ void BilibiliApiClient::checkCookieRefresh(
         bool needRefresh = data.value(QStringLiteral("refresh")).toBool(false);
         qint64 timestamp = static_cast<qint64>(data.value(QStringLiteral("timestamp")).toDouble(0));
         callback(needRefresh, timestamp);
+    });
+}
+
+void BilibiliApiClient::generateQrCode(
+    std::function<void(bool, QString, QString, QString)> callback)
+{
+    DBG << "generateQrCode() - 请求生成二维码";
+
+    QUrl url(QStringLiteral("https://passport.bilibili.com/x/passport-login/web/qrcode/generate"));
+
+    // 使用 getJson 发送请求（独立 QNetworkReply 连接，无信号窜扰）
+    getJson(QStringLiteral("qrcode_generate"), url,
+            [callback](bool success, QJsonObject json, QString error) {
+        DBG << "generateQrCode 响应: success=" << success << "error=" << error;
+        if (!success) {
+            callback(false, QString(), QString(), error);
+            return;
+        }
+
+        // 提取 data 中的 url 和 qrcode_key
+        QJsonObject data = json.value(QStringLiteral("data")).toObject();
+        QString qrUrl = data.value(QStringLiteral("url")).toString();
+        QString qrcodeKey = data.value(QStringLiteral("qrcode_key")).toString();
+
+        DBG << "  qrcode_key=" << qrcodeKey << "url_len=" << qrUrl.length();
+
+        // 校验：两个字段都必须非空才算成功
+        callback(!qrUrl.isEmpty() && !qrcodeKey.isEmpty(), qrUrl, qrcodeKey, QString());
+    });
+}
+
+void BilibiliApiClient::pollQrCode(const QString &qrcodeKey,
+                                   std::function<void(int, QString)> callback)
+{
+    QUrl url(QStringLiteral("https://passport.bilibili.com/x/passport-login/web/qrcode/poll"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("qrcode_key"), qrcodeKey);
+    url.setQuery(query);
+
+    // 手动设置请求头（模拟浏览器行为，避免被反爬拦截）
+    QNetworkRequest request(url);
+    request.setRawHeader("Accept", "application/json, text/plain, */*");
+    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/120.0.0.0 Safari/537.36");
+    request.setRawHeader("Referer", "https://www.bilibili.com");
+
+    // ★ 关键设计：独立 QNetworkReply 连接
+    // 不使用 getJson()，因为轮询请求每2秒一次，若复用 getJson 的信号路由
+    // 可能与 checkLogin/getNavInfo 等并发请求产生响应窜扰
+    QNetworkReply *reply = m_httpClient->networkManager()->get(request);
+
+    // 连接 reply 的 finished 信号（1:1 绑定，不会被其他请求的回调干扰）
+    QObject::connect(reply, &QNetworkReply::finished, this, [reply, callback]() {
+        reply->deleteLater();
+
+        int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        QByteArray body = reply->readAll();
+
+        // 完整响应日志（调试用）
+        DBG << "pollQrCode httpStatus=" << httpStatus << "body=" << QString::fromUtf8(body);
+
+        // 网络层错误
+        if (reply->error() != QNetworkReply::NoError) {
+            DBG << "pollQrCode 网络错误:" << reply->errorString();
+            callback(-1, QStringLiteral("网络错误: ") + reply->errorString());
+            return;
+        }
+
+        QJsonDocument doc = QJsonDocument::fromJson(body);
+        if (!doc.isObject()) {
+            DBG << "pollQrCode JSON解析失败";
+            callback(-1, QStringLiteral("JSON 解析失败"));
+            return;
+        }
+
+        // =====================================================================
+        // ★ B站 poll API 嵌套 JSON 解析逻辑（曾是最棘手的 Bug 根源）
+        //
+        // B站 poll API 返回的 JSON 有两种可能的格式：
+        //
+        // 格式 A — 嵌套格式（最常见）：
+        //   { "code": 0,
+        //     "data": {
+        //       "code": 86101,       // ← 这才是扫码状态码！
+        //       "message": "未扫码"
+        //     }
+        //   }
+        //
+        // 格式 B — 扁平格式（成功时可能返回）：
+        //   { "code": 0,
+        //     "data": {
+        //       "url": "https://...",          // 无 data.code 字段
+        //       "refresh_token": "abc123..."    // 但有登录凭据
+        //     }
+        //   }
+        //
+        // 早期的 Bug：直接取顶层 code（永远是 0=请求成功），导致：
+        //   二维码刚生成就显示"登录成功"（实际 data.code=86101 未扫码）
+        //   用户扫码确认后登录不生效  （顶层 code 仍为 0，未进入成功分支）
+        //
+        // 修复策略：
+        //   1. 优先检查 data.code 是否存在（嵌套格式）
+        //   2. 如果 data 无 code 字段但含 url/refresh_token → 登录成功（扁平格式）
+        //   3. 如果 data 无 code 且无凭据 → 按未扫码处理（顶层 code=0 是假阳性）
+        // =====================================================================
+        QJsonObject json = doc.object();
+        int topCode = json.value(QStringLiteral("code")).toInt(-1);
+        QJsonObject data = json.value(QStringLiteral("data")).toObject();
+
+        int scanCode = topCode;
+        QString scanMsg;
+
+        if (data.contains(QStringLiteral("code"))) {
+            // 格式 A：嵌套格式，取 data.code 作为真实扫码状态
+            scanCode = data.value(QStringLiteral("code")).toInt(-1);
+            scanMsg = data.value(QStringLiteral("message")).toString();
+        } else if (topCode == 0) {
+            // 格式 B：顶层 code=0，但 data 没有 code 字段
+            // 检查 data 是否包含登录凭据（url 或 refresh_token）
+            if (!data.value(QStringLiteral("url")).toString().isEmpty() ||
+                !data.value(QStringLiteral("refresh_token")).toString().isEmpty()) {
+                scanCode = 0; // 真正的登录成功（服务器已返回 Cookie）
+            } else {
+                // topCode=0 但 data 无任何有用信息 → 当作未扫码继续轮询
+                scanCode = 86101;
+            }
+        }
+
+        DBG << "pollQrCode scanCode=" << scanCode << "msg=" << scanMsg;
+        callback(scanCode, scanMsg);
     });
 }
 
@@ -222,6 +367,29 @@ void BilibiliApiClient::getFavoriteResourceList(qint64 mediaId, int page, int pa
         QJsonArray medias = data.value(QStringLiteral("medias")).toArray();
         bool hasMore = data.value(QStringLiteral("has_more")).toBool(false);
         callback(true, info, medias, hasMore, QString());
+    });
+}
+
+// ============================================================================
+// 音乐区 API
+// ============================================================================
+
+void BilibiliApiClient::getMusicRank(int page, int pageSize,
+    std::function<void(bool, QJsonArray, QString)> callback)
+{
+    DBG << "getMusicRank() - page:" << page << "size:" << pageSize;
+    QUrl url(QStringLiteral("https://www.bilibili.com/audio/music-service-c/web/menu/rank"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("pn"), QString::number(page));
+    query.addQueryItem(QStringLiteral("ps"), QString::number(pageSize));
+    url.setQuery(query);
+
+    getJson(QStringLiteral("music_rank"), url,
+            [callback](bool success, QJsonObject json, QString error) {
+        if (!success) { callback(false, QJsonArray(), error); return; }
+        QJsonObject data = json.value(QStringLiteral("data")).toObject();
+        QJsonArray list = data.value(QStringLiteral("data")).toArray();
+        callback(true, list, QString());
     });
 }
 

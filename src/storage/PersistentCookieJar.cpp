@@ -138,8 +138,8 @@ void PersistentCookieJar::setCookieString(const QString &cookieString)
     QList<QNetworkCookie> cookies;
 
     for (const auto &part : parts) {
-        int eqPos = part.indexOf('=');
-        if (eqPos > 0) {
+        int eqPos = part.indexOf('=');  //在当前片段中查找等号 = 的位置（索引从 0 开始）。如果找不到，indexOf 返回 -1。
+        if (eqPos > 0) {                //仅当等号位置大于 0（即存在等号且等号不在字符串首字符）时，才尝试提取键值对。
             QString name = part.left(eqPos).trimmed();
             QString value = part.mid(eqPos + 1).trimmed();
 
