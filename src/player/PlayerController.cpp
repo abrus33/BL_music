@@ -37,6 +37,8 @@ PlayerController::PlayerController(QObject *parent)
             this, &PlayerController::onErrorOccurred);
     connect(m_player, &QMediaPlayer::sourceChanged,
             this, &PlayerController::sourceChanged);
+    connect(m_player, &QMediaPlayer::mediaStatusChanged,
+            this, &PlayerController::onMediaStatusChanged);
 
     DBG << "PlayerController 初始化完成";
 }
@@ -226,4 +228,20 @@ void PlayerController::onErrorOccurred()
     QString errorStr = m_player->errorString();
     qWarning().noquote() << "[PlayerController] 错误:" << err << errorStr;
     emit playerError(static_cast<int>(err), errorStr);
+}
+
+void PlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
+{
+    if (status == QMediaPlayer::EndOfMedia) {
+        DBG << "Track finished (EndOfMedia), emitting trackFinished";
+        emit trackFinished();
+    } else if (status == QMediaPlayer::LoadedMedia && m_pendingPlay) {
+        // 媒体加载完成且有待播放标志：自动开始播放
+        // 这处理了 setSource() 异步下载后自动播放的场景：
+        //   setSource() → 异步下载 → setSourceDevice() → QMediaPlayer 加载
+        //   → LoadedMedia 状态触发 → 在此处执行被延迟的 play()
+        m_pendingPlay = false;
+        DBG << "LoadedMedia + pendingPlay, auto-playing";
+        m_player->play();
+    }
 }

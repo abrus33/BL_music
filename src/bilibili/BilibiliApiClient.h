@@ -35,6 +35,18 @@ public:
      */
     explicit BilibiliApiClient(HttpClient *httpClient, QObject *parent = nullptr);
 
+    /**
+     * @brief 预热会话 —— 先访问 B站 首页建立完整 Cookie/Session
+     *
+     * B站 对收藏夹内容等敏感接口有更严格的风控（HTTP 412），
+     * 直接请求 API 容易被拦截。先访问一次首页可以让 B站 后端
+     * 建立完整的会话上下文（写入必要的 cookie/指纹），
+     * 后续 API 请求就不容易触发风控。
+     *
+     * 此方法是 fire-and-forget 的，不需要等待结果。
+     */
+    void warmUp();
+
     // ==================== 登录相关 API ====================
 
     /**

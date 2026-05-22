@@ -16,6 +16,7 @@
 #include <QDateTime>
 #include <QMap>
 #include <QSet>
+#include <QThread>
 #include <QDebug>
 
 #include "network/HttpClient.h"
@@ -33,6 +34,24 @@ BilibiliApiClient::BilibiliApiClient(HttpClient *httpClient, QObject *parent)
     : QObject(parent)
     , m_httpClient(httpClient)
 {
+}
+
+void BilibiliApiClient::warmUp()
+{
+    DBG << "warmUp() - 访问 B站 首页建立会话...";
+    QNetworkRequest request(QUrl(QStringLiteral("https://www.bilibili.com/")));
+    request.setRawHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/120.0.0.0 Safari/537.36");
+    // warmUp 不需要 Referer/Origin（浏览器直接访问首页本来就没有）
+    QNetworkReply *reply = m_httpClient->networkManager()->get(request);
+    QObject::connect(reply, &QNetworkReply::finished, this, [reply]() {
+        int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        DBG << "warmUp 响应: httpStatus:" << status
+            << "cookies:" << reply->header(QNetworkRequest::SetCookieHeader).toString();
+        reply->deleteLater();
+    });
 }
 
 // ============================================================================
@@ -68,16 +87,18 @@ BilibiliApiClient::BilibiliApiClient(HttpClient *httpClient, QObject *parent)
 void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
                                  std::function<void(bool, QJsonObject, QString)> callback)
 {
+    DBG << "getJson REQUEST api:" << apiName
+        << "url:" << url.toString(QUrl::RemoveQuery).left(80)
+        << "thread:" << QThread::currentThread();
+
     // 直接使用 QNetworkAccessManager 创建独立请求
-    // 不再使用 HttpClient::get() + requestFinished 全局信号，
-    // 避免多个 getJson 调用之间的竞态条件（如 generateQrCode 和 checkLogin 同时活跃时，
-    // generate 的 code:0 响应会被 checkLogin 的监听器误收，反之亦然）
     QNetworkRequest request(url);
     request.setRawHeader("Accept", "application/json, text/plain, */*");
     request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                          "AppleWebKit/537.36 (KHTML, like Gecko) "
                          "Chrome/120.0.0.0 Safari/537.36");
     request.setRawHeader("Referer", "https://www.bilibili.com");
+    request.setRawHeader("Origin", "https://www.bilibili.com");
 
     QNetworkReply *reply = m_httpClient->networkManager()->get(request);
 
@@ -88,7 +109,14 @@ void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
         QByteArray body = reply->readAll();
         bool networkOk = (reply->error() == QNetworkReply::NoError);
 
+        DBG << "getJson RESPONSE api:" << apiName
+            << "httpStatus:" << statusCode
+            << "networkOk:" << networkOk
+            << "bodySize:" << body.size();
+
         if (!networkOk) {
+            QString bodyPreview = QString::fromUtf8(body.left(500));
+            DBG << "getJson ERROR body:" << bodyPreview;
             emit apiError(apiName, statusCode, reply->errorString());
             callback(false, QJsonObject(), QStringLiteral("网络错误: ") + reply->errorString());
             return;
@@ -105,6 +133,7 @@ void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
         QString message = json.value(QStringLiteral("message")).toString();
 
         if (code != 0) {
+            DBG << "getJson API ERROR api:" << apiName << "code:" << code << "msg:" << message;
             if (code != -1) {
                 emit apiError(apiName, code, message);
             }
@@ -112,6 +141,7 @@ void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
             return;
         }
 
+        DBG << "getJson API OK api:" << apiName;
         callback(true, json, QString());
     });
 }
@@ -348,6 +378,9 @@ void BilibiliApiClient::getFavoriteFolderList(qint64 upMid,
 void BilibiliApiClient::getFavoriteResourceList(qint64 mediaId, int page, int pageSize,
     std::function<void(bool, QJsonObject, QJsonArray, bool, QString)> callback)
 {
+    DBG << "getFavoriteResourceList() mediaId:" << mediaId
+        << "page:" << page << "pageSize:" << pageSize;
+
     QUrl url(QStringLiteral("https://api.bilibili.com/x/v3/fav/resource/list"));
     QUrlQuery query;
     query.addQueryItem(QStringLiteral("media_id"), QString::number(mediaId));
@@ -357,7 +390,11 @@ void BilibiliApiClient::getFavoriteResourceList(qint64 mediaId, int page, int pa
     url.setQuery(query);
 
     getJson(QStringLiteral("fav_resource_list"), url,
-            [callback](bool success, QJsonObject json, QString error) {
+            [callback, mediaId, page](bool success, QJsonObject json, QString error) {
+        DBG << "getFavoriteResourceList 响应: mediaId:" << mediaId
+            << "page:" << page << "success:" << success
+            << "error:" << error;
+
         if (!success) {
             callback(false, QJsonObject(), QJsonArray(), false, error);
             return;
@@ -366,6 +403,10 @@ void BilibiliApiClient::getFavoriteResourceList(qint64 mediaId, int page, int pa
         QJsonObject info = data.value(QStringLiteral("info")).toObject();
         QJsonArray medias = data.value(QStringLiteral("medias")).toArray();
         bool hasMore = data.value(QStringLiteral("has_more")).toBool(false);
+
+        DBG << "getFavoriteResourceList 解析: medias_count:" << medias.size()
+            << "hasMore:" << hasMore;
+
         callback(true, info, medias, hasMore, QString());
     });
 }

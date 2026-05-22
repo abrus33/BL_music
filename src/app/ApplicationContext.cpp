@@ -23,6 +23,7 @@
 #include "player/MediaResolver.h"        // 媒体解析器
 #include "player/PlayerController.h"     // 播放器控制器
 #include "bilibili/MusicService.h"       // 音乐区服务
+#include "player/PlaylistService.h"     // 播放列表服务
 
 /**
  * @brief 构造函数
@@ -60,6 +61,8 @@ ApplicationContext::ApplicationContext(QObject *parent)
     , m_playerController(new PlayerController(this))
     // MusicService 依赖 BilibiliApiClient（获取音乐榜单数据）
     , m_musicService(new MusicService(m_bilibiliApiClient, this))
+    // PlaylistService 依赖 AppSettings（持久化）+ MediaResolver（URL解析）+ PlayerController（播放控制）
+    , m_playlistService(new PlaylistService(m_settings, m_mediaResolver, m_playerController, this))
 {
 }
 
@@ -129,6 +132,12 @@ MusicService *ApplicationContext::musicService() const
     return m_musicService;
 }
 
+/** @return 播放列表服务指针 */
+PlaylistService *ApplicationContext::playlistService() const
+{
+    return m_playlistService;
+}
+
 /**
  * @brief 初始化服务
  *
@@ -154,7 +163,10 @@ void ApplicationContext::initialize()
     // 2. 将自定义 CookieJar 挂载到 QNetworkAccessManager
     m_httpClient->networkManager()->setCookieJar(m_cookieJar);
 
-    // 3. 如果本地有 Cookie，立即验证登录态
+    // 3. 预热 B站会话（先访问首页建立完整 Cookie/Session，避免后续 API 触发 412 风控）
+    m_bilibiliApiClient->warmUp();
+
+    // 4. 如果本地有 Cookie，立即验证登录态
     if (m_cookieJar->isLoggedIn()) {
         m_authService->checkLogin();
     }

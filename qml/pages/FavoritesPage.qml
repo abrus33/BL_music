@@ -12,37 +12,95 @@ ScrollView {
 
     property string viewState: "folders"
     property string currentFolderTitle: ""
-    property int currentMediaId: 0
+    property var currentMediaId: 0
 
     property var folderModel: []
     property var resourceModel: []
     property bool hasMoreResources: false
 
     property bool _loading: false
+    property var _pendingStartId: 0   // 用户点击时暂存资源 ID，全量加载完成后用于创建播放列表
     property string _playError: ""
+
+    // ---- 自动加载收藏夹：页面可见且已登录时自动触发 ----
+    onVisibleChanged: {
+        if (!visible) return
+        Qt.callLater(tryAutoLoadFolders)
+    }
+
+    Connections {
+        target: applicationContext ? applicationContext.authService : null
+        enabled: target !== null
+        function onLoginStateChanged() {
+            // 登录状态变化时：如果已登出，清空列表；如果已登录，尝试自动加载
+            var auth = applicationContext.authService
+            if (auth && !auth.isLoggedIn) {
+                folderModel = []
+                resourceModel = []
+            }
+            if (visible) Qt.callLater(tryAutoLoadFolders)
+        }
+    }
+
+    function tryAutoLoadFolders() {
+        console.log("[FavoritesPage] tryAutoLoadFolders, folderModel.length:", folderModel.length, "_loading:", _loading)
+        if (folderModel.length > 0 || _loading) return
+        var auth = applicationContext ? applicationContext.authService : null
+        if (auth && auth.isLoggedIn) {
+            console.log("[FavoritesPage] auto-loading folders, userMid:", auth.userMid)
+            _loading = true
+            applicationContext.favoriteService.loadFavoriteFolders(auth.userMid)
+        } else {
+            console.log("[FavoritesPage] skip auto-load: auth=", auth, "isLoggedIn=", auth ? auth.isLoggedIn : "N/A")
+        }
+    }
 
     Component.onCompleted: Qt.callLater(function() {
         var svc = applicationContext ? applicationContext.favoriteService : null
         if (!svc) return
         svc.favoriteFoldersLoaded.connect(function(success, f, error) {
+            console.log("[FavoritesPage] favoriteFoldersLoaded: success=", success, "jsonLen=", f ? f.length : 0)
             _loading = false
             if (success && f && f.length > 0) { try { folderModel = JSON.parse(f); } catch(e) {} }
         })
         svc.favoriteResourcesLoaded.connect(function(success, info, medias, hasMore, error) {
+            console.log("[FavoritesPage] favoriteResourcesLoaded: success=", success, "mediasLen=", medias ? medias.length : 0, "hasMore=", hasMore)
             _loading = false
             if (success && medias && medias.length > 0) {
                 try { resourceModel = JSON.parse(medias); } catch(e) {}
                 hasMoreResources = hasMore
             } else { resourceModel = []; }
         })
-        var res = applicationContext.mediaResolver
+        // mediaResolved 连接仅作错误提示用途（播放由 PlaylistService 管理）
+        var res = applicationContext ? applicationContext.mediaResolver : null
         if (res) {
             res.mediaResolved.connect(function(success, url, t, c, d, error) {
-                if (success && url && url.length > 0) {
-                    applicationContext.playerController.source = url
-                } else { _playError = qsTr("播放失败: ") + error; }
+                if (!success || error.length > 0) {
+                    _playError = qsTr("播放失败: ") + error
+                }
             })
         }
+        // allFavoriteResourcesLoaded: 全量加载完成后更新显示+创建播放列表
+        svc.allFavoriteResourcesLoaded.connect(function(success, mediasJson, error) {
+            console.log("[FavoritesPage] allFavoriteResourcesLoaded: success=", success, "jsonLen=", mediasJson ? mediasJson.length : 0, "error=", error, "pendingStartId=", _pendingStartId)
+            _loading = false
+            if (!success || !mediasJson || mediasJson.length === 0) {
+                if (error.length > 0) _playError = qsTr("加载失败: ") + error
+                else resourceModel = []
+                return
+            }
+            // 更新页面显示：用全部数据替换 resourceModel
+            try { resourceModel = JSON.parse(mediasJson); } catch(e) {}
+            hasMoreResources = false
+
+            // 如果用户在加载期间点击了某个视频，创建播放列表
+            var ps = applicationContext ? applicationContext.playlistService : null
+            if (ps && _pendingStartId > 0) {
+                console.log("[FavoritesPage] creating playlist from allFavoriteResources, size:", resourceModel.length, "startId:", _pendingStartId)
+                ps.createPlaylist(mediasJson, _pendingStartId)
+                _pendingStartId = 0
+            }
+        })
     })
 
     Rectangle {
@@ -135,10 +193,11 @@ ScrollView {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             var mid = _item.id || 0
+                            console.log("[FavoritesPage] folder clicked: id=", mid, "title=", _item.title)
                             viewState = "resources"
                             currentFolderTitle = _item.title || qsTr("收藏夹"); currentMediaId = mid
-                            _loading = true; resourceModel = []
-                            applicationContext.favoriteService.loadFavoriteResources(mid, 1, 20)
+                            _loading = true; resourceModel = []; _playError = ""
+                            applicationContext.favoriteService.loadAllFavoriteResources(mid)
                         }
                     }
                     ColumnLayout {
@@ -170,16 +229,19 @@ ScrollView {
                         id: resMouse; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
+                            console.log("[FavoritesPage] resource clicked: id=", _item.id, "title=", _item.title, "attr=", _item.attr)
                             if (_item.attr !== undefined && _item.attr !== 0) {
                                 _playError = qsTr("该资源已失效"); return
                             }
-                            applicationContext.playerController.mediaTitle = _item.title || qsTr("未知标题")
-                            applicationContext.playerController.mediaCover = _item.cover || ""
-                            if (_item.type === 12)
-                                applicationContext.mediaResolver.resolve(_item.id, 12)
-                            else {
-                                var bv = _item.bvid || _item.bv_id || ""
-                                applicationContext.mediaResolver.resolve(_item.id, 2, bv, 0)
+                            var ps = applicationContext ? applicationContext.playlistService : null
+                            if (ps && resourceModel.length > 0) {
+                                // 数据已在进入收藏夹时全量加载，直接创建播放列表
+                                console.log("[FavoritesPage] creating playlist from resourceModel, size:", resourceModel.length, "startId:", _item.id)
+                                ps.createPlaylist(JSON.stringify(resourceModel), _item.id)
+                            } else {
+                                // 回退：数据尚未加载完成，暂存 ID 等待 allFavoriteResourcesLoaded
+                                console.log("[FavoritesPage] resourceModel not ready, deferring via _pendingStartId")
+                                _pendingStartId = _item.id
                             }
                         }
                     }

@@ -57,6 +57,17 @@ public:
      */
     Q_INVOKABLE void loadFavoriteResources(qint64 mediaId, int page, int pageSize);
 
+    /**
+     * @brief 获取收藏夹全部内容（自动翻页直到 hasMore==false）
+     * @param mediaId 收藏夹 mlid
+     *
+     * 内部递归调用 getFavoriteResourceList，逐页累积所有数据。
+     * 结果通过 allFavoriteResourcesLoaded 信号一次性返回完整的 JSON 数组。
+     *
+     * 用于创建完整播放列表（而不是仅加载第一页 20 条）
+     */
+    Q_INVOKABLE void loadAllFavoriteResources(qint64 mediaId);
+
 signals:
     /**
      * @brief 收藏夹列表加载完成信号
@@ -78,7 +89,37 @@ signals:
                                   const QString &mediasJson, bool hasMore,
                                   const QString &error);
 
+    /**
+     * @brief 收藏夹全部内容加载完成信号（loadAllFavoriteResources 专用）
+     * @param success    是否成功
+     * @param mediasJson 全部内容的 JSON 数组字符串
+     * @param error      错误信息（仅在 success==false 时有意义）
+     *
+     * 与 favoriteResourcesLoaded 的区别：
+     *   此信号在所有分页加载完成后一次性发射，mediasJson 包含全部数据，
+     *   而不是逐页返回。
+     */
+    void allFavoriteResourcesLoaded(bool success, const QString &mediasJson,
+                                    const QString &error);
+
 private:
     /** B站 API 客户端 */
     BilibiliApiClient *m_apiClient;
+
+    /**
+     * @brief 逐页递归加载收藏夹内容
+     * @param mediaId  收藏夹 mlid
+     * @param page     当前页码
+     * @param pageSize 每页数量
+     *
+     * 内部由 loadAllFavoriteResources 启动，通过网络回调 + QMetaObject::invokeMethod
+     * 递归调用自身直到 hasMore==false，然后发射 allFavoriteResourcesLoaded 信号。
+     * 使用 QMetaObject::invokeMethod 确保每次递归调用都回到主线程，避免跨线程创建 QObject 子对象。
+     */
+    void loadFavoritesPage(qint64 mediaId, int page, int pageSize);
+
+    /** 全量加载的累积数据（由 loadAllFavoriteResources 初始化，loadFavoritesPage 追加） */
+    QJsonArray m_accumulatedMedias;
+    /** 全量加载是否正在进行中（用于丢弃过期的异步回调） */
+    bool m_accumulating = false;
 };

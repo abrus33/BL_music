@@ -8,8 +8,8 @@
 
 #include <QObject>
 #include <QBuffer>
+#include <QMediaPlayer>
 
-class QMediaPlayer;
 class QAudioOutput;
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -56,10 +56,12 @@ signals:
     void mediaTitleChanged();
     void mediaCoverChanged();
     void playerError(int errorCode, const QString &errorString);
+    void trackFinished();  // 当前音轨自然播放到结尾时发射
 
 private slots:
     void onStateChanged();
     void onErrorOccurred();
+    void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
 
 private:
     QMediaPlayer *m_player;
