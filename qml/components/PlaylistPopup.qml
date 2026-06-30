@@ -1,5 +1,10 @@
 // ============================================================================
 // PlaylistPopup.qml - 播放列表弹出窗口
+//
+// 新人阅读重点：
+// 1. 这里只展示 PlaylistService 中已经存在的播放列表，不自己维护列表数据。
+// 2. PlaylistService::playlistItems 是 JSON 字符串，QML 每次打开/刷新时 JSON.parse。
+// 3. 点击某一项调用 playAt(index)，清空按钮调用 clear()。
 // ============================================================================
 
 import QtQuick
@@ -14,6 +19,7 @@ Popup {
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     width: 480; height: 560
 
+    // 播放列表服务引用。保存成局部属性后，下面绑定表达式更短。
     property var _ps: null
 
     Component.onCompleted: Qt.callLater(function() {
@@ -53,6 +59,7 @@ Popup {
             id: playlistView
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true; spacing: 4
+            // C++ 为了简化跨语言传参，把 QJsonArray 压成 JSON 字符串传给 QML。
             model: _ps ? JSON.parse(_ps.playlistItems) : []
             currentIndex: _ps ? _ps.currentIndex : -1
 
@@ -73,6 +80,7 @@ Popup {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
+                    // 播放列表的跳转逻辑在 C++，QML 只传递目标 index。
                     onClicked: { if (_ps) _ps.playAt(index) }
                 }
 

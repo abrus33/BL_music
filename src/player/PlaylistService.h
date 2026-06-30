@@ -172,8 +172,8 @@ private:
     // ---- 门控标志 ----
     bool m_isRestoring = false;        // 正在恢复中, 不自动播放
     bool m_isResolving = false;        // 正在解析 URL, 防止重入
-    int  m_resolveGen   = 0;           // 解析请求生成 ID, 用于丢弃过期的异步回调
+    int  m_resolveGen   = 0;           // 解析请求编号；当前主要用于调试，后续可扩展为旧回调丢弃
 
-    // ---- 位���保存定时器 ----
+    // ---- 位置保存定时器 ----
     QTimer *m_positionSaveTimer;
 };

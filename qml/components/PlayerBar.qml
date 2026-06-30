@@ -1,5 +1,11 @@
 // ============================================================================
 // PlayerBar.qml - 底部播放控制栏
+//
+// 新人阅读重点：
+// 1. 这是一个“展示 + 控制”组件，真正的播放逻辑在 C++ PlayerController。
+// 2. _pc 保存 playerController，_ps 保存 playlistService，都是 applicationContext 暴露的服务。
+// 3. 按钮点击直接调用 C++ 的 Q_INVOKABLE 方法，如 play()/pause()/next()/seek()。
+// 4. 打开播放列表时不直接操作 Popup，而是发出 playlistButtonClicked 信号给 Main.qml。
 // ============================================================================
 
 import QtQuick
@@ -14,6 +20,7 @@ Rectangle {
     signal playlistButtonClicked()
 
     // ---- 内部引用 ----
+    // Qt.callLater 后再取 applicationContext，避免组件创建早期 C++ 上下文还没就绪。
     property var _pc: null
     property var _ps: null
 
@@ -135,6 +142,7 @@ Rectangle {
                 to: (_pc && _pc.source !== "") ? _pc.duration : 0
                 value: _pc ? _pc.position : 0
                 enabled: _pc !== null
+                // onMoved 只在用户拖动时触发；普通 position 更新不会反复 seek。
                 onMoved: { if (_pc && _pc.source !== "") _pc.seek(value) }
 
                 background: Rectangle {
@@ -170,6 +178,7 @@ Rectangle {
             Layout.preferredWidth: 100
             from: 0; to: 100
             value: _pc ? _pc.volume * 100 : 50
+            // QML 使用 0~100，C++ QAudioOutput 使用 0.0~1.0。
             onMoved: if (_pc) _pc.setVolume(value / 100)
         }
 

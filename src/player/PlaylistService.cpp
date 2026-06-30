@@ -236,8 +236,8 @@ void PlaylistService::clear()
  * 从 m_items[m_currentIndex] 提取媒体信息，
  * 设置 PlayerController 的标题/封面，调用 MediaResolver 解析播放 URL。
  *
- * 使用 m_resolveGen 防竞态：递增后传给 onMediaResolved 检查，
- * 防止旧的回调覆盖新请求的结果。
+ * 当前用 m_isResolving 防止重复解析；m_resolveGen 作为请求编号递增，
+ * 方便后续扩展为“回调携带编号并丢弃旧响应”的更严格防竞态方案。
  */
 void PlaylistService::resolveAndPlayCurrentItem()
 {
@@ -261,7 +261,7 @@ void PlaylistService::resolveAndPlayCurrentItem()
 
     // 标记正在解析，递增生成 ID
     m_isResolving = true;
-    int gen = ++m_resolveGen;
+    ++m_resolveGen;
 
     // 异步解析
     m_mediaResolver->resolve(id, type, bvid, 0);

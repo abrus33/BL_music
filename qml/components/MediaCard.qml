@@ -1,6 +1,11 @@
 // ============================================================================
 // MediaCard.qml - 通用媒体卡片（封面+标题+时长+悬停效果）
 // layoutMode: "grid" (纵向, HomePage) | "list" (横向, FavoritesPage)
+//
+// 新人阅读重点：
+// 1. 这是纯 UI 组件，不知道 B站 API，也不直接播放。
+// 2. 父页面通过属性传入 cover/title/duration/type。
+// 3. 用户点击后只发出 clicked() 信号，具体播放逻辑由父页面决定。
 // ============================================================================
 
 import QtQuick
@@ -15,6 +20,7 @@ Rectangle {
     signal clicked()
 
     // ---- 属性接口 ----
+    // 这些属性就是组件对外的“参数”。父页面创建 MediaCard 时给它们赋值。
     property string coverUrl: ""
     property string title: ""
     property string subtitle: ""
@@ -33,6 +39,7 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
+        // 向外发信号，而不是在组件内部写业务逻辑，这样组件可以复用。
         onClicked: card.clicked()
     }
 

@@ -1,5 +1,11 @@
 // ============================================================================
 // LoginPage.qml - 登录页面（Cookie 登录 + 扫码登录）
+//
+// 新人阅读重点：
+// 1. 本页不自己访问网络，所有登录动作都调用 AuthService。
+// 2. Cookie 登录：importCookie() -> C++ 保存 Cookie -> checkLogin() -> loginChecked。
+// 3. 扫码登录：startQrLogin() -> C++ 生成二维码并轮询 -> qrStatus/qrImageUrl 绑定刷新。
+// 4. Connections 用来接收 C++ signal；普通属性绑定用来显示 C++ Q_PROPERTY。
 // ============================================================================
 
 import QtQuick
@@ -29,6 +35,7 @@ ScrollView {
 
             // ---- 登录状态 ----
             Label {
+                // isLoggedIn 和 userName 是 C++ AuthService 暴露的 Q_PROPERTY。
                 text: applicationContext.authService.isLoggedIn
                       ? qsTr("已登录：%1").arg(applicationContext.authService.userName)
                       : qsTr("登录后可同步你的 B站收藏夹与个性化内容。")
@@ -118,6 +125,7 @@ ScrollView {
                                     enabled: cookieInput.text.trim().length > 0
                                     btnWidth: 160
                                     onClicked: {
+                                        // QML 只把字符串传给 C++，解析、保存、验证都在 AuthService 完成。
                                         applicationContext.authService.importCookie(cookieInput.text.trim())
                                         cookieInput.text = ""
                                     }
@@ -140,6 +148,8 @@ ScrollView {
 
                             Connections {
                                 target: applicationContext.authService
+                                // AuthService::checkLogin 完成后发出 loginChecked。
+                                // 导入 Cookie 和扫码登录成功最终都会走到这条通知链。
                                 function onLoginChecked(success, userName) {
                                     loginResultLabel.text = success
                                         ? qsTr("登录成功！欢迎 %1").arg(userName)
@@ -196,6 +206,7 @@ ScrollView {
                                 Image {
                                     id: qrImage
                                     anchors.centerIn: parent; width: 220; height: 220
+                                    // qrImageUrl 是 C++ 生成的二维码图片地址；为空时显示占位状态。
                                     source: applicationContext.authService.qrImageUrl
                                     visible: applicationContext.authService.qrImageUrl.length > 0
                                     fillMode: Image.PreserveAspectFit; smooth: true; cache: false
@@ -209,6 +220,7 @@ ScrollView {
                             // ---- 状态文字 ----
                             Label {
                                 Layout.alignment: Qt.AlignHCenter
+                                // qrStatus 由 C++ 轮询二维码状态时更新。
                                 text: applicationContext.authService.qrStatus
                                 color: {
                                     var s = applicationContext.authService.qrStatus
@@ -230,6 +242,7 @@ ScrollView {
                                           ? qsTr("加载中...") : qsTr("获取二维码")
                                     enabled: !applicationContext.authService.qrLoginActive
                                     btnWidth: 160
+                                    // 开始扫码登录后，C++ 会生成二维码并启动 QTimer 轮询。
                                     onClicked: applicationContext.authService.startQrLogin()
                                 }
                                 AppButton {
@@ -237,6 +250,7 @@ ScrollView {
                                     visible: applicationContext.authService.qrLoginActive
                                     bgColor: Theme.colors.borderInput
                                     btnWidth: 100
+                                    // 取消只停止本地轮询，不需要调用 B站取消接口。
                                     onClicked: applicationContext.authService.stopQrLogin()
                                 }
                             }

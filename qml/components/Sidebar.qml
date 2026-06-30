@@ -1,5 +1,10 @@
 // ============================================================================
 // Sidebar.qml - 侧边导航栏
+//
+// 新人阅读重点：
+// 1. Sidebar 不知道页面具体内容，只维护 currentIndex。
+// 2. Main.qml 把 currentIndex 绑定到 StackLayout.currentIndex 完成页面切换。
+// 3. 用户信息直接绑定 AuthService 的 Q_PROPERTY，登录状态变化后自动刷新。
 // ============================================================================
 
 import QtQuick
@@ -10,7 +15,9 @@ import "Theme.js" as Theme
 Rectangle {
     id: sidebar
 
+    // 导航项索引：0=首页，1=收藏夹，2=登录。
     property int currentIndex: 0
+    // 给父组件的通知。当前 Main.qml 主要用 currentIndex 绑定即可。
     signal navigationRequested(int index)
 
     color: Theme.colors.bgSidebar
@@ -36,6 +43,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true; implicitHeight: 56
             radius: Theme.radius.button
+            // applicationContext 来自 main.cpp 的 setContextProperty。
             color: applicationContext && applicationContext.authService
                    && applicationContext.authService.isLoggedIn
                    ? Theme.colors.bgCard : "transparent"
@@ -77,12 +85,14 @@ Rectangle {
             Layout.fillWidth: true; spacing: 4
 
             Repeater {
+                // 小型固定菜单直接用 JS 数组即可，不需要 C++ Model。
                 model: [
                     { label: qsTr("首页"), icon: "" },
                     { label: qsTr("收藏夹"), icon: "📂" },
                     { label: qsTr("登录"), icon: "🔑" }
                 ]
                 delegate: Rectangle {
+                    // required property 是 Qt 6 推荐写法，明确说明 delegate 需要哪些隐式数据。
                     required property var modelData; required property int index
                     Layout.fillWidth: true; implicitHeight: Theme.sizes.navItemHeight
                     radius: Theme.radius.button
@@ -104,6 +114,7 @@ Rectangle {
                     MouseArea {
                         id: navMouse; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        // 修改 currentIndex 后，Main.qml 的 StackLayout 会自动切换页面。
                         onClicked: { sidebar.currentIndex = index; sidebar.navigationRequested(index) }
                     }
                 }

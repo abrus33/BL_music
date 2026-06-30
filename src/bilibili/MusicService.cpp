@@ -1,5 +1,6 @@
 // ============================================================================
 // MusicService.cpp - 音乐区服务实现
+// 功能：把 B站音乐榜单接口返回的嵌套 JSON 整理成 QML 更容易展示的扁平列表
 // ============================================================================
 
 #include "MusicService.h"
@@ -11,6 +12,13 @@
 MusicService::MusicService(BilibiliApiClient *apiClient, QObject *parent)
     : QObject(parent), m_apiClient(apiClient) {}
 
+/**
+ * @brief 加载音乐区榜单，并把结果通过 musicRankLoaded 信号发给 QML。
+ *
+ * B站接口返回的是“榜单 -> 多首音频”的嵌套结构；HomePage 只需要一个
+ * 可直接 Repeater 的列表，所以这里把每首音频展开成一条 item，并补上
+ * chart/artist/cover 等展示字段。
+ */
 void MusicService::loadMusicRank(int page, int pageSize)
 {
     m_apiClient->getMusicRank(page, pageSize,

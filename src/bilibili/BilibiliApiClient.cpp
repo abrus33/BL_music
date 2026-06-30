@@ -481,8 +481,11 @@ void BilibiliApiClient::getAudioStreamUrl(qint64 audioId,
     query.addQueryItem(QStringLiteral("sid"), QString::number(audioId));
     url.setQuery(query);
 
-    // 注意：音频接口返回的是 code+msg（不是标准的 code+message）
-    // 使用 getJson 会导致 msg 被当做 message 字段
+    // 注意：音频接口返回的是 code+msg（不是标准的 code+message）。
+    // 这里复用 HttpClient::requestFinished 信号来拿响应。新人需要知道：
+    // 这种写法适合“同一时间只有一个此类请求”的简单场景；如果未来音频 URL
+    // 请求会高并发，应该改成 getJson() 那种“每个 QNetworkReply 独立绑定回调”
+    // 的方式，避免不同请求的响应互相窜扰。
     m_httpClient->get(url);
 
     QMetaObject::Connection *conn = new QMetaObject::Connection();
