@@ -8,6 +8,24 @@
 #include <QStandardPaths>   // 跨平台标准路径（获取 AppData 目录等）
 #include <QDir>             // 目录操作
 
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
+
+namespace {
+bool systemReduceMotionDefault()
+{
+#ifdef Q_OS_WIN
+    BOOL animationsEnabled = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0,
+                              &animationsEnabled, 0)) {
+        return !animationsEnabled;
+    }
+#endif
+    return false;
+}
+}
+
 /**
  * @brief 构造函数
  * @param parent Qt 父对象
@@ -96,4 +114,19 @@ QString AppSettings::appDataPath() const
     // mkpath 确保目录存在，如果不存在则创建所有级联目录
     QDir().mkpath(path);
     return path;
+}
+
+bool AppSettings::reduceMotion() const
+{
+    return m_settings.value(QStringLiteral("accessibility/reduceMotion"),
+                            systemReduceMotionDefault()).toBool();
+}
+
+void AppSettings::setReduceMotion(bool reduceMotion)
+{
+    if (this->reduceMotion() == reduceMotion)
+        return;
+    m_settings.setValue(QStringLiteral("accessibility/reduceMotion"), reduceMotion);
+    m_settings.sync();
+    emit reduceMotionChanged();
 }

@@ -191,7 +191,7 @@ public:
      * @param bvid    视频 BV 号
      * @param callback 回调 (success, cid, error)
      */
-    void getVideoCid(const QString &bvid,
+    virtual void getVideoCid(const QString &bvid,
         std::function<void(bool success, qint64 cid, QString error)> callback);
 
     /**
@@ -204,7 +204,7 @@ public:
      * @param audioId 音频 auid（如收藏夹内容中的 id，type=12）
      * @param callback 回调 (success, url, error)
      */
-    void getAudioStreamUrl(qint64 audioId,
+    virtual void getAudioStreamUrl(qint64 audioId,
         std::function<void(bool success, QString url, QString error)> callback);
 
     /**
@@ -217,7 +217,7 @@ public:
      * @param cid     视频分 P 的 cid
      * @param callback 回调 (success, url, error)
      */
-    void getVideoPlayUrl(const QString &bvid, qint64 cid,
+    virtual void getVideoPlayUrl(const QString &bvid, qint64 cid,
         std::function<void(bool success, QString url, QString error)> callback);
 
 signals:

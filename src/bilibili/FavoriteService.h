@@ -10,6 +10,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+#include "bilibili/FavoriteLoadSession.h"
+
 class BilibiliApiClient;
 
 /**
@@ -75,7 +77,8 @@ signals:
      * @param folders JSON 数组字符串（可直接在 QML 中 parse）
      * @param error   错误信息
      */
-    void favoriteFoldersLoaded(bool success, const QString &foldersJson, const QString &error);
+    void favoriteFoldersLoaded(qint64 upMid, bool success, const QString &foldersJson,
+                               const QString &error);
 
     /**
      * @brief 收藏夹内容加载完成信号
@@ -91,6 +94,7 @@ signals:
 
     /**
      * @brief 收藏夹全部内容加载完成信号（loadAllFavoriteResources 专用）
+     * @param mediaId   本次全量加载对应的收藏夹 ID
      * @param success    是否成功
      * @param mediasJson 全部内容的 JSON 数组字符串
      * @param error      错误信息（仅在 success==false 时有意义）
@@ -99,7 +103,7 @@ signals:
      *   此信号在所有分页加载完成后一次性发射，mediasJson 包含全部数据，
      *   而不是逐页返回。
      */
-    void allFavoriteResourcesLoaded(bool success, const QString &mediasJson,
+    void allFavoriteResourcesLoaded(qint64 mediaId, bool success, const QString &mediasJson,
                                     const QString &error);
 
 private:
@@ -112,14 +116,11 @@ private:
      * @param page     当前页码
      * @param pageSize 每页数量
      *
-     * 内部由 loadAllFavoriteResources 启动，通过网络回调 + QMetaObject::invokeMethod
+     * 内部由 loadAllFavoriteResources 启动，通过网络回调 + QTimer::singleShot
      * 递归调用自身直到 hasMore==false，然后发射 allFavoriteResourcesLoaded 信号。
-     * 使用 QMetaObject::invokeMethod 确保每次递归调用都回到主线程，避免跨线程创建 QObject 子对象。
+     * generation 用于拒绝已被后续全量加载取代的异步回调。
      */
-    void loadFavoritesPage(qint64 mediaId, int page, int pageSize);
+    void loadFavoritesPage(qint64 mediaId, int page, int pageSize, quint64 generation);
 
-    /** 全量加载的累积数据（由 loadAllFavoriteResources 初始化，loadFavoritesPage 追加） */
-    QJsonArray m_accumulatedMedias;
-    /** 全量加载是否正在进行中（用于丢弃过期的异步回调） */
-    bool m_accumulating = false;
+    FavoriteLoadSession m_loadSession;
 };

@@ -8,6 +8,7 @@
 
 #include <QObject>
 #include <QString>
+#include <functional>
 
 class BilibiliApiClient;
 
@@ -51,6 +52,9 @@ public:
      */
     Q_INVOKABLE void resolve(qint64 id, int type, const QString &bvid = QString(), qint64 cid = 0);
 
+    Q_INVOKABLE void resolveForOwner(const QString &ownerToken, qint64 id, int type,
+                                     const QString &bvid = QString(), qint64 cid = 0);
+
 signals:
     /**
      * @brief 媒体解析完成信号
@@ -64,7 +68,17 @@ signals:
     void mediaResolved(bool success, const QString &url, const QString &title,
                        const QString &cover, int duration, const QString &error);
 
+    void mediaResolvedForOwner(const QString &ownerToken, bool success,
+                               const QString &url, const QString &title,
+                               const QString &cover, int duration,
+                               const QString &error);
+
 private:
+    using ResultHandler = std::function<void(bool, const QString &, const QString &)>;
+
+    void resolveInternal(qint64 id, int type, const QString &bvid, qint64 cid,
+                         ResultHandler handler);
+
     /** B站 API 客户端 */
     BilibiliApiClient *m_apiClient;
 };

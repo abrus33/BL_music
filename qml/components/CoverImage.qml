@@ -15,26 +15,37 @@ Rectangle {
 
     // ---- 属性 ----
     property string coverUrl: ""
-    property string placeholderIcon: "♪"
+    property string placeholderIcon: ""
     property int placeholderSize: 24
+    property url placeholderSource: "qrc:/qt/qml/cursor_music/icon/music-2.svg"
 
-    radius: Theme.radius.cover
+    radius: Theme.radius.control
     clip: true
-    color: Theme.colors.bgPlaceholder
+    color: Theme.colors.surfaceRaised
 
     Image {
         id: coverImg
         anchors.fill: parent
         source: cover.coverUrl
+        sourceSize.width: Math.max(1, cover.width)
+        sourceSize.height: Math.max(1, cover.height)
         fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+    }
+
+    AppIcon {
+        anchors.centerIn: parent
+        source: cover.placeholderSource
+        iconColor: Theme.colors.textDisabled
+        iconSize: cover.placeholderSize
+        visible: coverImg.status !== Image.Ready && cover.placeholderIcon.length === 0
     }
 
     Label {
         anchors.centerIn: parent
         text: cover.placeholderIcon
-        color: Theme.colors.textDim
+        color: Theme.colors.textDisabled
         font.pixelSize: cover.placeholderSize
-        // 图片没准备好时显示图标；Ready 后由真实封面覆盖。
-        visible: coverImg.status !== Image.Ready
+        visible: coverImg.status !== Image.Ready && text.length > 0
     }
 }

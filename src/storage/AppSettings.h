@@ -38,6 +38,8 @@ class AppSettings : public QObject
     Q_OBJECT
     // appDataPath 属性：暴露应用数据目录给 QML 使用（常量，只读）
     Q_PROPERTY(QString appDataPath READ appDataPath CONSTANT)
+    Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion
+               NOTIFY reduceMotionChanged)
 
 public:
     /**
@@ -100,6 +102,12 @@ public:
      * 此目录用于存储：Cookie 文件、日志、缓存等数据。
      */
     QString appDataPath() const;
+
+    bool reduceMotion() const;
+    void setReduceMotion(bool reduceMotion);
+
+signals:
+    void reduceMotionChanged();
 
 private:
     /** QSettings 实例，基于 INI 格式的应用层存储 */

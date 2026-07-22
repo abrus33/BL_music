@@ -1,262 +1,390 @@
-// ============================================================================
-// FavoritesPage.qml - 收藏夹页面
-//
-// 新人阅读重点：
-// 1. 页面有两个状态：folders 显示收藏夹列表，resources 显示某个收藏夹内容。
-// 2. 收藏夹数据由 FavoriteService 异步加载，结果通过 signal 返回 JSON 字符串。
-// 3. 点击资源时优先交给 PlaylistService 创建完整播放列表，而不是只播单首。
-// 4. _pendingStartId 用来处理“点击时列表还在加载”的情况：等全量加载完成后再播放。
-// ============================================================================
+pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components"
 import "../components/Theme.js" as Theme
 
-ScrollView {
-    clip: true
+Item {
+    id: root
 
-    // viewState 是页面自己的小状态机。
-    // "folders": 收藏夹列表；"resources": 当前收藏夹中的媒体列表。
-    property string viewState: "folders"
+    required property var authService
+    required property var favoriteService
+    required property var playlistService
+    required property var playerController
+
+    property string viewState: "foldersLoading"
     property string currentFolderTitle: ""
     property var currentMediaId: 0
-
-    // C++ 返回 JSON 字符串，QML 解析后存到这两个数组供 Repeater 使用。
     property var folderModel: []
     property var resourceModel: []
-    property bool hasMoreResources: false
+    property string errorMessage: ""
+    property var _folderCache: ({})
+    property real _overviewContentY: 0
+    property bool _showingCachedData: false
 
-    // 以下划线开头的属性是页面内部状态，不建议其他 QML 文件直接访问。
-    property bool _loading: false
-    property var _pendingStartId: 0
-    property string _playError: ""
-
-    // ---- 自动加载 ----
-    // 页面变为可见时尝试加载收藏夹。这样用户先登录再切回收藏页时也能刷新。
-    onVisibleChanged: {
-        if (!visible) return
-        Qt.callLater(tryAutoLoadFolders)
-    }
-
-    // 登录状态变化会影响收藏夹页面：退出登录时要清空旧数据。
-    Connections {
-        target: applicationContext ? applicationContext.authService : null
-        enabled: target !== null
-        function onLoginStateChanged() {
-            var auth = applicationContext.authService
-            if (auth && !auth.isLoggedIn) {
-                folderModel = []; resourceModel = []
-            }
-            if (visible) Qt.callLater(tryAutoLoadFolders)
+    readonly property int stackIndex: viewState === "foldersLoading"
+                                      || viewState === "foldersReady" ? 0 : 1
+    readonly property bool folderOverviewVisible: stackIndex === 0
+    readonly property bool folderDetailVisible: stackIndex === 1
+    readonly property var _currentPlayingItem: {
+        try {
+            return JSON.parse(playlistService.currentItemJson || "{}")
+        } catch (error) {
+            return {}
         }
     }
+    readonly property var currentPlayingItemId: _currentPlayingItem.id || 0
 
-    function tryAutoLoadFolders() {
-        if (folderModel.length > 0 || _loading) return
-        var auth = applicationContext ? applicationContext.authService : null
-        if (auth && auth.isLoggedIn) {
-            _loading = true
-            // QML 调用 C++：FavoriteService::loadFavoriteFolders(upMid)
-            applicationContext.favoriteService.loadFavoriteFolders(auth.userMid)
-        }
+    function parseArray(json) {
+        const parsed = JSON.parse(json)
+        if (!Array.isArray(parsed))
+            throw new Error("Expected a JSON array")
+        return parsed
     }
 
-    Component.onCompleted: Qt.callLater(function() {
-        var svc = applicationContext ? applicationContext.favoriteService : null
-        if (!svc) return
-
-        // C++ 的 QJsonArray 不能直接自然地传给 QML，这里约定用 JSON 字符串桥接。
-        svc.favoriteFoldersLoaded.connect(function(success, f, error) {
-            _loading = false
-            if (success && f && f.length > 0) { try { folderModel = JSON.parse(f); } catch(e) {} }
-        })
-
-        // 单页加载结果。当前页面主要使用 allFavoriteResourcesLoaded 做全量播放列表。
-        svc.favoriteResourcesLoaded.connect(function(success, info, medias, hasMore, error) {
-            _loading = false
-            if (success && medias && medias.length > 0) {
-                try { resourceModel = JSON.parse(medias); } catch(e) {}
-                hasMoreResources = hasMore
-            } else { resourceModel = []; }
-        })
-
-        // 全量加载结果：用于创建播放列表，保证 next/previous 有完整队列。
-        svc.allFavoriteResourcesLoaded.connect(function(success, mediasJson, error) {
-            _loading = false
-            if (!success || !mediasJson || mediasJson.length === 0) {
-                if (error.length > 0) _playError = qsTr("加载失败: ") + error
-                else resourceModel = []
-                return
-            }
-            try { resourceModel = JSON.parse(mediasJson); } catch(e) {}
-            hasMoreResources = false
-
-            var ps = applicationContext ? applicationContext.playlistService : null
-            if (ps && _pendingStartId > 0) {
-                // loadAllFavoriteResources 是异步的；真正创建播放列表要等这里拿到完整 JSON。
-                ps.createPlaylist(mediasJson, _pendingStartId)
-                _pendingStartId = 0
-            }
-        })
-
-        var res = applicationContext ? applicationContext.mediaResolver : null
-        if (res) {
-            res.mediaResolved.connect(function(success, url, t, c, d, error) {
-                if (!success || error.length > 0) _playError = qsTr("播放失败: ") + error
+    function rebuildMediaViewModel() {
+        mediaViewModel.clear()
+        for (let index = 0; index < resourceModel.length; ++index) {
+            const item = resourceModel[index]
+            mediaViewModel.append({
+                mediaId: item.id,
+                title: item.title || qsTr("Unknown title"),
+                coverUrl: item.cover || item.pic || "",
+                uploader: item.upper && item.upper.name ? item.upper.name : "",
+                resourceTypeLabel: item.type === 2 ? qsTr("Video")
+                                   : item.type === 12 ? qsTr("Audio")
+                                   : item.type === 21 ? qsTr("Video collection")
+                                                     : qsTr("Media"),
+                duration: formatDuration(item.duration),
+                invalid: item.attr !== undefined && item.attr !== 0
             })
         }
-    })
+    }
 
-    Rectangle {
-        implicitWidth: 900
-        implicitHeight: contentColumn.implicitHeight + 48
-        color: Theme.colors.bgContent
+    function formatDuration(seconds) {
+        if (seconds === undefined || seconds === null || seconds === "")
+            return ""
+        const total = Math.max(0, Math.floor(Number(seconds)))
+        const minutes = Math.floor(total / 60)
+        const remainder = total % 60
+        return (minutes < 10 ? "0" : "") + minutes + ":"
+                + (remainder < 10 ? "0" : "") + remainder
+    }
 
-        ColumnLayout {
-            id: contentColumn
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: Theme.spacing.page
-            spacing: Theme.spacing.card
+    function loadFolders() {
+        if (!authService || !authService.isLoggedIn) {
+            folderModel = []
+            viewState = "foldersReady"
+            return
+        }
+        errorMessage = ""
+        viewState = "foldersLoading"
+        favoriteService.loadFavoriteFolders(authService.userMid)
+    }
 
-            // ---- 标题栏 ----
-            RowLayout {
-                Layout.fillWidth: true; spacing: Theme.spacing.item
+    function openFolder(folder) {
+        if (!folder)
+            return
 
-                AppButton {
-                    text: qsTr("< 返回")
-                    visible: viewState === "resources"
-                    bgColor: Theme.colors.borderInput
-                    btnWidth: 80; btnHeight: 36
-                    btnRadius: Theme.radius.card
-                    onClicked: { viewState = "folders"; currentFolderTitle = "" }
-                }
-                Label {
-                    text: viewState === "folders" ? qsTr("收藏夹") : currentFolderTitle || qsTr("收藏夹内容")
-                    color: Theme.colors.textPrimary
-                    font.pixelSize: Theme.fontSizes.h1; font.bold: true
-                    Layout.fillWidth: true
-                }
+        const overviewFlickable = folderOverview.contentItem as Flickable
+        _overviewContentY = overviewFlickable ? overviewFlickable.contentY : 0
+        currentMediaId = folder.id || 0
+        currentFolderTitle = folder.title || qsTr("Favorites")
+        errorMessage = ""
+
+        const cached = _folderCache[currentMediaId]
+        if (cached !== undefined) {
+            resourceModel = cached
+            rebuildMediaViewModel()
+            _showingCachedData = true
+            viewState = resourceModel.length === 0 ? "empty" : "folderReady"
+        } else {
+            resourceModel = []
+            rebuildMediaViewModel()
+            _showingCachedData = false
+            viewState = "folderLoading"
+        }
+
+        favoriteService.loadAllFavoriteResources(currentMediaId)
+    }
+
+    function goBack() {
+        currentMediaId = 0
+        viewState = "foldersReady"
+        currentFolderTitle = ""
+        Qt.callLater(function() {
+            const overviewFlickable = folderOverview.contentItem as Flickable
+            if (overviewFlickable)
+                overviewFlickable.contentY = _overviewContentY
+        })
+    }
+
+    function retry() {
+        errorMessage = ""
+        if (currentMediaId) {
+            viewState = "folderLoading"
+            favoriteService.loadAllFavoriteResources(currentMediaId)
+        } else {
+            loadFolders()
+        }
+    }
+
+    function handleFoldersLoaded(upMid, success, foldersJson, error) {
+        if (!authService || !authService.isLoggedIn
+                || upMid !== authService.userMid)
+            return
+
+        if (!success) {
+            errorMessage = error || qsTr("Could not load favorites")
+            currentMediaId = 0
+            viewState = "error"
+            return
+        }
+
+        try {
+            folderModel = parseArray(foldersJson)
+            errorMessage = ""
+            viewState = "foldersReady"
+        } catch (parseError) {
+            folderModel = []
+            errorMessage = qsTr("Invalid favorites response")
+            currentMediaId = 0
+            viewState = "error"
+        }
+    }
+
+    function handleResourcesLoaded(mediaId, success, mediasJson, error) {
+        if (mediaId !== currentMediaId)
+            return
+
+        if (!success) {
+            errorMessage = error || qsTr("Could not load folder")
+            if (_showingCachedData) {
+                viewState = resourceModel.length === 0 ? "empty" : "folderReady"
+            } else {
+                viewState = "error"
             }
+            return
+        }
 
-            // ---- 登录状态提示 ----
-            Label {
-                visible: viewState === "folders"
-                text: (applicationContext && applicationContext.authService
-                       && applicationContext.authService.isLoggedIn)
-                      ? qsTr("已登录，点击收藏夹查看内容")
-                      : qsTr("请先在「登录」页面导入 Cookie")
-                color: Theme.colors.textTertiary
-                wrapMode: Text.Wrap; Layout.fillWidth: true
-                font.pixelSize: Theme.fontSizes.bodySmall
-            }
+        try {
+            const resources = parseArray(mediasJson)
+            resourceModel = resources
+            rebuildMediaViewModel()
+            _folderCache[mediaId] = resources
+            _showingCachedData = false
+            errorMessage = ""
+            viewState = resources.length === 0 ? "empty" : "folderReady"
+        } catch (parseError) {
+            errorMessage = qsTr("Invalid folder response")
+            if (_showingCachedData)
+                viewState = resourceModel.length === 0 ? "empty" : "folderReady"
+            else
+                viewState = "error"
+        }
+    }
 
-            // ---- 加载按钮 ----
-            AppButton {
-                text: qsTr("加载收藏夹列表")
-                enabled: applicationContext && applicationContext.authService
-                         && applicationContext.authService.isLoggedIn
-                visible: folderModel.length === 0 && viewState === "folders"
-                onClicked: {
-                    _loading = true
-                    applicationContext.favoriteService.loadFavoriteFolders(
-                        applicationContext.authService.userMid)
-                }
-            }
+    function clearForLogout() {
+        folderModel = []
+        resourceModel = []
+        rebuildMediaViewModel()
+        _folderCache = ({})
+        currentMediaId = 0
+        currentFolderTitle = ""
+        errorMessage = ""
+        _overviewContentY = 0
+        _showingCachedData = false
+        viewState = "foldersReady"
+    }
 
-            // ---- 加载提示 ----
-            Label {
-                visible: _loading
-                text: qsTr("加载中...")
-                color: Theme.colors.textMuted; font.pixelSize: Theme.fontSizes.caption
-            }
+    Connections {
+        target: root.authService
+        function onLoginStateChanged() {
+            if (!root.authService.isLoggedIn)
+                root.clearForLogout()
+            else
+                root.loadFolders()
+        }
+    }
 
-            // ---- 收藏夹列表 ----
-            Repeater {
-                id: folderRepeater; model: folderModel; visible: viewState === "folders"
-                delegate: Rectangle {
-                    // folderRepeater.model[index] 是当前收藏夹对象。
-                    readonly property var _item: folderRepeater.model[index] || {}
-                    Layout.fillWidth: true
-                    implicitHeight: 80; radius: Theme.radius.card
-                    color: fldMouse.containsMouse ? Theme.colors.bgCardHover : Theme.colors.bgCard
-                    Behavior on color { ColorAnimation { duration: Theme.duration.fast } }
+    Connections {
+        target: root.favoriteService
+        function onFavoriteFoldersLoaded(upMid, success, foldersJson, error) {
+            root.handleFoldersLoaded(upMid, success, foldersJson, error)
+        }
+        function onAllFavoriteResourcesLoaded(mediaId, success, mediasJson, error) {
+            root.handleResourcesLoaded(mediaId, success, mediasJson, error)
+        }
+    }
 
-                    MouseArea {
-                        id: fldMouse; anchors.fill: parent; hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            var mid = _item.id || 0
-                            // 点击收藏夹后切换到 resources 状态，并全量加载该收藏夹内容。
-                            viewState = "resources"
-                            currentFolderTitle = _item.title || qsTr("收藏夹"); currentMediaId = mid
-                            _loading = true; resourceModel = []; _playError = ""
-                            applicationContext.favoriteService.loadAllFavoriteResources(mid)
-                        }
+    Component.onCompleted: Qt.callLater(loadFolders)
+
+    ListModel {
+        id: mediaViewModel
+    }
+
+    StackLayout {
+        id: viewStack
+        objectName: "favoritesViewStack"
+        anchors.fill: parent
+        currentIndex: root.stackIndex
+
+        ScrollView {
+            id: folderOverview
+            objectName: "folderOverview"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: availableWidth
+            contentHeight: overviewContent.height
+
+            Item {
+                id: overviewContent
+                width: Math.max(folderOverview.availableWidth,
+                                Theme.sizes.favoritesContentMinWidth)
+                height: Math.max(Theme.sizes.favoritesContentMinHeight,
+                                 overviewColumn.implicitHeight + 2 * Theme.spacing.xl)
+
+                ColumnLayout {
+                    id: overviewColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Theme.spacing.xl
+                    spacing: Theme.spacing.xl
+
+                    PageHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("Favorites")
+                        subtitle: root.authService && root.authService.isLoggedIn
+                                  ? qsTr("Your saved folders")
+                                  : qsTr("Sign in to view favorites")
                     }
+
+                    SkeletonList {
+                        Layout.fillWidth: true
+                        visible: root.viewState === "foldersLoading"
+                        count: 5
+                    }
+
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: Theme.spacing.section
-                        spacing: Theme.spacing.tight
+                        Layout.fillWidth: true
+                        visible: root.viewState === "foldersReady"
+                        spacing: Theme.spacing.sm
 
-                        Label {
-                            text: _item.title || qsTr("未知收藏夹")
-                            color: Theme.colors.textSecondary
-                            font.pixelSize: Theme.fontSizes.h3; font.bold: true
-                            elide: Text.ElideRight
+                        Repeater {
+                            model: root.folderModel
+                            delegate: FolderCard {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Theme.sizes.favoriteFolderCardHeight
+                                folderId: modelData.id || 0
+                                title: modelData.title || qsTr("Untitled folder")
+                                itemCount: modelData.media_count || 0
+                                onOpened: root.openFolder(modelData)
+                            }
                         }
-                        Label {
-                            text: qsTr("%1 个内容").arg(_item.media_count || 0)
-                            color: Theme.colors.textTertiary
-                            font.pixelSize: Theme.fontSizes.caption
-                        }
-                    }
-                }
-            }
 
-            // ---- 资源列表 ----
-            Repeater {
-                id: resRepeater; model: resourceModel; visible: viewState === "resources"
-                delegate: MediaCard {
-                    // 这里的 _item 是 B站收藏夹中的一个媒体条目。
-                    readonly property var _item: resRepeater.model[index] || {}
-                    Layout.fillWidth: true
-                    implicitHeight: 100
-                    layoutMode: "list"
-                    coverUrl: _item.cover || ""
-                    title: _item.title || qsTr("未知标题")
-                    subtitle: (_item.upper && _item.upper.name) || ""
-                    duration: _item.duration || 0
-                    mediaType: _item.type || 12
-
-                    onClicked: {
-                        if (_item.attr !== undefined && _item.attr !== 0) {
-                            _playError = qsTr("该资源已失效"); return
-                        }
-                        var ps = applicationContext ? applicationContext.playlistService : null
-                        if (ps && resourceModel.length > 0) {
-                            // 把当前收藏夹全部资源交给 PlaylistService，起播项是当前点击的 id。
-                            ps.createPlaylist(JSON.stringify(resourceModel), _item.id)
-                        } else {
-                            // 如果数据还没准备好，先记住要播放的 id，等 allFavoriteResourcesLoaded。
-                            _pendingStartId = _item.id
+                        EmptyState {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Theme.sizes.statePanelHeight
+                            visible: root.folderModel.length === 0
+                            title: root.authService && root.authService.isLoggedIn
+                                   ? qsTr("No favorite folders") : qsTr("Sign in required")
+                            message: root.authService && root.authService.isLoggedIn
+                                     ? qsTr("Saved folders will appear here")
+                                     : qsTr("Import your cookie from the Login page")
                         }
                     }
                 }
             }
+        }
 
-            // ---- 错误/空状态 ----
-            Label {
-                text: _playError
-                color: Theme.colors.error; font.pixelSize: Theme.fontSizes.caption
-                visible: text.length > 0
-            }
-            Label {
-                visible: viewState === "resources" && resourceModel.length === 0 && !_loading
-                text: qsTr("该收藏夹暂无内容")
-                color: Theme.colors.textDim; font.pixelSize: Theme.fontSizes.caption
-                Layout.alignment: Qt.AlignHCenter
+        ScrollView {
+            id: folderDetail
+            objectName: "folderDetail"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            contentWidth: availableWidth
+            contentHeight: detailContent.height
+
+            Item {
+                id: detailContent
+                width: Math.max(folderDetail.availableWidth,
+                                Theme.sizes.favoritesContentMinWidth)
+                height: Math.max(Theme.sizes.favoritesContentMinHeight,
+                                 detailColumn.implicitHeight + 2 * Theme.spacing.xl)
+
+                ColumnLayout {
+                    id: detailColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Theme.spacing.xl
+                    spacing: Theme.spacing.xl
+
+                    PageHeader {
+                        Layout.fillWidth: true
+                        title: root.currentFolderTitle || qsTr("Favorites")
+                        subtitle: root.viewState === "folderReady"
+                                  ? qsTr("%1 items").arg(root.resourceModel.length) : ""
+                        showBack: true
+                        onBackRequested: root.goBack()
+                    }
+
+                    SkeletonList {
+                        Layout.fillWidth: true
+                        visible: root.viewState === "folderLoading"
+                        count: 7
+                    }
+
+                    MediaList {
+                        id: mediaList
+                        objectName: "favoriteMediaList"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.max(
+                                                    Theme.sizes.mediaRowHeight,
+                                                    count * (Theme.sizes.mediaRowHeight
+                                                             + Theme.spacing.xs))
+                        visible: root.viewState === "folderReady"
+                        interactive: false
+                        model: mediaViewModel
+                        currentMediaId: root.currentPlayingItemId
+                        onMediaActivated: function(mediaId) {
+                            root.playlistService.createPlaylist(
+                                        JSON.stringify(root.resourceModel), mediaId)
+                        }
+                    }
+
+                    EmptyState {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Theme.sizes.statePanelHeight
+                        visible: root.viewState === "empty"
+                        title: qsTr("This folder is empty")
+                        message: qsTr("Add media to see it here")
+                    }
+
+                    ErrorState {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Theme.sizes.statePanelHeight
+                        visible: root.viewState === "error"
+                        message: root.errorMessage
+                        onRetryRequested: root.retry()
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.viewState === "folderReady"
+                                 && root.errorMessage.length > 0
+                        text: root.errorMessage
+                        color: Theme.colors.error
+                        font.pixelSize: Theme.fontSizes.caption
+                        wrapMode: Text.Wrap
+                    }
+                }
             }
         }
     }

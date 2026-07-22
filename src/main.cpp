@@ -5,7 +5,6 @@
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include <QQmlContext>
 #include <QQuickStyle>              // QML 风格设置（支持 Button 自定义背景）
 
 #include "app/ApplicationContext.h"
@@ -49,7 +48,9 @@ int main(int argc, char *argv[])
     applicationContext.initialize();
 
     // ---- 6. 将 C++ 对象暴露给 QML 层 ----
-    engine.rootContext()->setContextProperty("applicationContext", &applicationContext);
+    engine.setInitialProperties({
+        {QStringLiteral("appContext"), QVariant::fromValue(&applicationContext)}
+    });
 
     // ---- 7. 连接引擎创建失败信号 ----
     QObject::connect(

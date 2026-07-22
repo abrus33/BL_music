@@ -7,25 +7,28 @@
 // 2. QML 页面通过 Theme.colors.xxx 读取，避免每个文件到处写硬编码颜色。
 .pragma library
 
-// 颜色分组：bg* 是背景，text* 是文字，border* 是边框/分隔线。
+// 语义颜色。所有页面直接使用这些键，不保留旧名兼容层。
 var colors = {
+    transparent: "#00000000",
     accent: "#fb7299",
-    bgApp: "#181818",
-    bgSidebar: "#111111",
-    bgContent: "#202020",
-    bgCard: "#262626",
-    bgCardHover: "#2d2d2d",
-    bgPlayer: "#141414",
-    bgInput: "#1a1a1a",
-    bgPlaceholder: "#2a2a2a",
-    textPrimary: "#ffffff",
-    textSecondary: "#f5f5f5",
-    textTertiary: "#bcbcbc",
-    textMuted: "#9d9d9d",
-    textDim: "#7d7d7d",
-    borderPlayer: "#292929",
-    borderInput: "#3a3a3a",
-    error: "#fb7299"
+    canvas: "#151517",
+    surface: "#1b1b1e",
+    surfaceRaised: "#222226",
+    surfaceHover: "#29292e",
+    accentHover: "#ff8bad",
+    accentPressed: "#dc5f84",
+    accentChecked: "#3a2630",
+    controlInset: "#121214",
+    controlDisabled: "#2b2b30",
+    drawerBackdrop: "#99000000",
+    textPrimary: "#f5f5f7",
+    textSecondary: "#c8c8ce",
+    textTertiary: "#92929b",
+    textDisabled: "#62626a",
+    borderSoft: "#2b2b30",
+    borderFocus: "#fb7299",
+    error: "#ff7188",
+    qrSurface: "#ffffff"
 };
 
 // 字号分组：页面大标题用 h1，普通正文用 body，辅助说明用 caption/small。
@@ -40,38 +43,41 @@ var fontSizes = {
 };
 
 // 间距分组：命名按使用场景区分，避免看到一堆没有语义的数字。
-var spacing = {
-    page: 24,
-    card: 20,
-    section: 16,
-    item: 12,
-    compact: 8,
-    tight: 4
-};
+var spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
 
 // 圆角分组：组件按用途取值，保持视觉一致。
-var radius = {
-    card: 12,
-    button: 8,
-    input: 8,
-    cover: 8,
-    small: 6,
-    pill: 20
-};
+var radius = { control: 8, card: 12, panel: 16, round: 999 };
+
+var breakpoints = { compact: 860, expanded: 1180 };
+
+var motion = { fast: 140, page: 200, drawer: 240 };
 
 // 固定尺寸分组：主布局和常用控件尺寸集中放在这里。
 var sizes = {
-    sidebarWidth: 240,
     playerHeight: 92,
+    playerMediaExpandedWidth: 260,
+    playerMediaMediumWidth: 190,
+    playerProgressMinWidth: 180,
+    playerVolumeWidth: 132,
+    queueRowHeight: 56,
     coverSmall: 52,
-    coverMedium: 76,
+    coverMedium: 48,
     navItemHeight: 40,
-    btnHeight: 40
-};
-
-// 动画时长分组：hover、颜色变化等轻量动画使用。
-var duration = {
-    fast: 120,
-    normal: 200,
-    slow: 350
+    btnHeight: 40,
+    favoritesContentMinWidth: 320,
+    favoritesContentMinHeight: 560,
+    favoriteFolderCardHeight: 88,
+    mediaRowHeight: 72,
+    statePanelHeight: 220,
+    loginAccountIcon: 32,
+    loginLogoutButtonWidth: 120,
+    loginModeButtonWidth: 140,
+    loginInputMaxWidth: 560,
+    loginInputTrailingPadding: 52,
+    loginPrimaryButtonWidth: 160,
+    loginSecondaryButtonWidth: 100,
+    loginQrSkeletonMaxWidth: 320,
+    loginQrFrameSize: 236,
+    loginQrImageSize: 220,
+    loginQrLabelInset: 24
 };

@@ -1,312 +1,384 @@
-// ============================================================================
-// LoginPage.qml - 登录页面（Cookie 登录 + 扫码登录）
-//
-// 新人阅读重点：
-// 1. 本页不自己访问网络，所有登录动作都调用 AuthService。
-// 2. Cookie 登录：importCookie() -> C++ 保存 Cookie -> checkLogin() -> loginChecked。
-// 3. 扫码登录：startQrLogin() -> C++ 生成二维码并轮询 -> qrStatus/qrImageUrl 绑定刷新。
-// 4. Connections 用来接收 C++ signal；普通属性绑定用来显示 C++ Q_PROPERTY。
-// ============================================================================
+pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "../components"
 import "../components/Theme.js" as Theme
 
-ScrollView {
-    clip: true
+Item {
+    id: root
 
-    Rectangle {
-        implicitWidth: 900
-        implicitHeight: contentColumn.implicitHeight + 48
-        color: Theme.colors.bgContent
+    required property var authService
 
-        ColumnLayout {
-            id: contentColumn
-            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-            anchors.margins: Theme.spacing.page; spacing: Theme.spacing.card
+    property int loginMode: 0
+    property bool cookieVisible: false
+    property string loginResult: ""
+    readonly property string qrState: classifyQrState()
 
-            // ---- 标题 ----
-            Label {
-                text: qsTr("登录")
-                color: Theme.colors.textPrimary
-                font.pixelSize: Theme.fontSizes.h1; font.bold: true
-            }
+    function classifyQrState() {
+        const status = authService.qrStatus || ""
+        if (status.includes("成功"))
+            return "success"
+        if (status.includes("过期"))
+            return "expired"
+        if (status.includes("网络") || status.includes("失败"))
+            return "networkError"
+        if (status.includes("确认") || status.includes("已扫码"))
+            return "waitingConfirm"
+        if (status.includes("扫描") || status.includes("扫码"))
+            return "waitingScan"
+        if (authService.qrLoginActive && !authService.qrImageUrl)
+            return "generating"
+        return "idle"
+    }
 
-            // ---- 登录状态 ----
-            Label {
-                // isLoggedIn 和 userName 是 C++ AuthService 暴露的 Q_PROPERTY。
-                text: applicationContext.authService.isLoggedIn
-                      ? qsTr("已登录：%1").arg(applicationContext.authService.userName)
-                      : qsTr("登录后可同步你的 B站收藏夹与个性化内容。")
-                color: applicationContext.authService.isLoggedIn ? Theme.colors.accent : Theme.colors.textTertiary
-                wrapMode: Text.Wrap; Layout.fillWidth: true
-                font.pixelSize: Theme.fontSizes.bodySmall
-            }
+    function qrStatusText() {
+        switch (qrState) {
+        case "generating": return qsTr("Generating QR code…")
+        case "waitingScan": return qsTr("Waiting for scan")
+        case "waitingConfirm": return qsTr("Waiting for confirmation")
+        case "success": return qsTr("Login successful")
+        case "expired": return qsTr("QR code expired")
+        case "networkError": return authService.qrStatus || qsTr("Network error")
+        default: return qsTr("Generate a QR code to sign in")
+        }
+    }
 
-            // ---- Tab 切换按钮 ----
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter; spacing: 0
+    function qrStatusColor() {
+        if (qrState === "success")
+            return Theme.colors.accent
+        if (qrState === "expired" || qrState === "networkError")
+            return Theme.colors.error
+        return Theme.colors.textTertiary
+    }
 
-                AppButton {
-                    text: qsTr("Cookie 登录")
-                    bgColor: loginModeSwitch.currentIndex === 0 ? Theme.colors.accent : Theme.colors.bgPlaceholder
-                    textColor: loginModeSwitch.currentIndex === 0 ? Theme.colors.textPrimary : Theme.colors.textMuted
-                    btnWidth: 140; btnHeight: 40
-                    onClicked: loginModeSwitch.currentIndex = 0
+    Connections {
+        target: root.authService
+
+        function onLoginChecked(success, userName) {
+            root.loginResult = success
+                    ? qsTr("Login successful. Welcome, %1").arg(userName)
+                    : qsTr("Login failed. Check whether the cookie is valid.")
+        }
+    }
+
+    ScrollView {
+        id: pageScroll
+        anchors.fill: parent
+        clip: true
+        contentWidth: availableWidth
+        contentHeight: pageContent.height
+
+        Item {
+            id: pageContent
+            width: Math.max(pageScroll.availableWidth, Theme.sizes.favoritesContentMinWidth)
+            height: Math.max(Theme.sizes.favoritesContentMinHeight,
+                             pageColumn.implicitHeight + 2 * Theme.spacing.xl)
+
+            ColumnLayout {
+                id: pageColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Theme.spacing.xl
+                spacing: Theme.spacing.xl
+
+                PageHeader {
+                    Layout.fillWidth: true
+                    title: qsTr("Login")
+                    subtitle: root.authService.isLoggedIn
+                              ? qsTr("Your account is connected")
+                              : qsTr("Sign in to sync favorites and personalized content")
                 }
-                Item { width: Theme.spacing.compact; height: 1 }
-                AppButton {
-                    text: qsTr("扫码登录")
-                    bgColor: loginModeSwitch.currentIndex === 1 ? Theme.colors.accent : Theme.colors.bgPlaceholder
-                    textColor: loginModeSwitch.currentIndex === 1 ? Theme.colors.textPrimary : Theme.colors.textMuted
-                    btnWidth: 140; btnHeight: 40
-                    onClicked: loginModeSwitch.currentIndex = 1
-                }
-            }
 
-            // ---- SwipeView ----
-            SwipeView {
-                id: loginModeSwitch
-                Layout.fillWidth: true
-                Layout.preferredHeight: currentItem ? currentItem.implicitHeight : 300
-                interactive: false
+                Rectangle {
+                    objectName: "loggedInPanel"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: accountLayout.implicitHeight + 2 * Theme.spacing.lg
+                    visible: root.authService.isLoggedIn
+                    color: Theme.colors.surfaceRaised
+                    radius: Theme.radius.card
 
-                // ========== 0: Cookie 登录 ==========
-                Item {
-                    implicitHeight: cookieCard.height
+                    RowLayout {
+                        id: accountLayout
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacing.lg
+                        spacing: Theme.spacing.md
 
-                    Rectangle {
-                        id: cookieCard
-                        width: parent.width
-                        height: cookieLayout.implicitHeight + 40
-                        radius: Theme.radius.card; color: Theme.colors.bgCard
+                        AppIcon {
+                            Layout.preferredWidth: Theme.sizes.loginAccountIcon
+                            Layout.preferredHeight: Theme.sizes.loginAccountIcon
+                            source: "qrc:/qt/qml/cursor_music/icon/log-in.svg"
+                            iconSize: Theme.sizes.loginAccountIcon
+                            iconColor: Theme.colors.accent
+                        }
 
                         ColumnLayout {
-                            id: cookieLayout
-                            anchors.centerIn: parent
-                            width: parent.width - 40; spacing: Theme.spacing.section
+                            Layout.fillWidth: true
+                            spacing: Theme.spacing.xs
 
                             Label {
-                                Layout.alignment: Qt.AlignHCenter
-                                text: qsTr("从浏览器开发者工具复制 Cookie")
-                                color: Theme.colors.textMuted
+                                Layout.fillWidth: true
+                                text: root.authService.userName || qsTr("Signed-in user")
+                                color: Theme.colors.textPrimary
+                                font.pixelSize: Theme.fontSizes.h2
+                                font.bold: true
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("Signed in")
+                                color: Theme.colors.accent
                                 font.pixelSize: Theme.fontSizes.caption
-                                wrapMode: Text.Wrap
                             }
+                        }
 
-                            // ---- Cookie 输入框 ----
-                            Rectangle {
-                                Layout.fillWidth: true; Layout.preferredHeight: 40
-                                Layout.maximumWidth: 500; Layout.alignment: Qt.AlignHCenter
-                                radius: Theme.radius.input; color: Theme.colors.bgInput
-                                border.color: Theme.colors.borderInput
-
-                                TextInput {
-                                    id: cookieInput
-                                    anchors.fill: parent; anchors.margins: Theme.spacing.item
-                                    color: Theme.colors.textSecondary; font.pixelSize: Theme.fontSizes.caption
-                                    verticalAlignment: Text.AlignVCenter
-                                    Text {
-                                        anchors.fill: parent
-                                        text: qsTr("SESSDATA=xxx; bili_jct=xxx; ...")
-                                        color: Theme.colors.textDim
-                                        font: parent.font
-                                        visible: !parent.text.length
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter; spacing: Theme.spacing.item
-
-                                AppButton {
-                                    text: qsTr("导入 Cookie")
-                                    enabled: cookieInput.text.trim().length > 0
-                                    btnWidth: 160
-                                    onClicked: {
-                                        // QML 只把字符串传给 C++，解析、保存、验证都在 AuthService 完成。
-                                        applicationContext.authService.importCookie(cookieInput.text.trim())
-                                        cookieInput.text = ""
-                                    }
-                                }
-                                AppButton {
-                                    text: qsTr("退出登录")
-                                    visible: applicationContext.authService.isLoggedIn
-                                    bgColor: Theme.colors.borderInput
-                                    btnWidth: 120
-                                    onClicked: applicationContext.authService.logout()
-                                }
-                            }
-
-                            Label {
-                                id: loginResultLabel
-                                Layout.alignment: Qt.AlignHCenter; text: ""
-                                color: Theme.colors.accent; font.pixelSize: Theme.fontSizes.small
-                                visible: text.length > 0
-                            }
-
-                            Connections {
-                                target: applicationContext.authService
-                                // AuthService::checkLogin 完成后发出 loginChecked。
-                                // 导入 Cookie 和扫码登录成功最终都会走到这条通知链。
-                                function onLoginChecked(success, userName) {
-                                    loginResultLabel.text = success
-                                        ? qsTr("登录成功！欢迎 %1").arg(userName)
-                                        : qsTr("登录失败，请检查 Cookie 是否有效")
-                                }
-                            }
+                        AppButton {
+                            objectName: "logoutButton"
+                            text: qsTr("Logout")
+                            bgColor: Theme.colors.surfaceHover
+                            btnWidth: Theme.sizes.loginLogoutButtonWidth
+                            onClicked: root.authService.logout()
                         }
                     }
                 }
 
-                // ========== 1: 扫码登录 ==========
-                Item {
-                    implicitHeight: qrCard.height
+                ColumnLayout {
+                    objectName: "loginForms"
+                    Layout.fillWidth: true
+                    visible: !root.authService.isLoggedIn
+                    spacing: Theme.spacing.xl
 
-                    Rectangle {
-                        id: qrCard
-                        width: parent.width
-                        height: qrLayout.implicitHeight + 40
-                        radius: Theme.radius.card; color: Theme.colors.bgCard
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: Theme.spacing.sm
 
-                        ColumnLayout {
-                            id: qrLayout
-                            anchors.centerIn: parent
-                            width: parent.width - 40; spacing: Theme.spacing.section
+                        AppButton {
+                            objectName: "cookieModeButton"
+                            checkable: true
+                            flatButton: true
+                            checked: root.loginMode === 0
+                            autoExclusive: true
+                            Accessible.role: Accessible.RadioButton
+                            text: qsTr("Cookie login")
+                            bgColor: root.loginMode === 0
+                                     ? Theme.colors.accent : Theme.colors.surfaceRaised
+                            textColor: root.loginMode === 0
+                                       ? Theme.colors.textPrimary : Theme.colors.textTertiary
+                            btnWidth: Theme.sizes.loginModeButtonWidth
+                            onClicked: root.loginMode = 0
+                        }
 
-                            Label {
-                                Layout.alignment: Qt.AlignHCenter
-                                text: qsTr("使用B站APP扫描二维码登录")
-                                color: Theme.colors.textMuted
-                                font.pixelSize: Theme.fontSizes.caption
+                        AppButton {
+                            objectName: "qrModeButton"
+                            checkable: true
+                            flatButton: true
+                            checked: root.loginMode === 1
+                            autoExclusive: true
+                            Accessible.role: Accessible.RadioButton
+                            text: qsTr("QR login")
+                            bgColor: root.loginMode === 1
+                                     ? Theme.colors.accent : Theme.colors.surfaceRaised
+                            textColor: root.loginMode === 1
+                                       ? Theme.colors.textPrimary : Theme.colors.textTertiary
+                            btnWidth: Theme.sizes.loginModeButtonWidth
+                            onClicked: root.loginMode = 1
+                        }
+                    }
+
+                    StackLayout {
+                        Layout.fillWidth: true
+                        currentIndex: root.loginMode
+
+                        Rectangle {
+                            objectName: "cookieLoginForm"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: cookieLayout.implicitHeight + 2 * Theme.spacing.xl
+                            color: Theme.colors.surfaceRaised
+                            radius: Theme.radius.card
+
+                            ColumnLayout {
+                                id: cookieLayout
+                                anchors.fill: parent
+                                anchors.margins: Theme.spacing.xl
+                                spacing: Theme.spacing.lg
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Paste the cookie copied from your browser developer tools")
+                                    color: Theme.colors.textTertiary
+                                    font.pixelSize: Theme.fontSizes.caption
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.Wrap
+                                }
+
+                                TextField {
+                                    id: cookieInput
+                                    objectName: "cookieInput"
+                                    Layout.fillWidth: true
+                                    Layout.maximumWidth: Theme.sizes.loginInputMaxWidth
+                                    Layout.alignment: Qt.AlignHCenter
+                                    placeholderText: qsTr("SESSDATA=xxx; bili_jct=xxx; …")
+                                    color: Theme.colors.textSecondary
+                                    placeholderTextColor: Theme.colors.textDisabled
+                                    echoMode: root.cookieVisible ? TextInput.Normal : TextInput.Password
+                                    rightPadding: Theme.sizes.loginInputTrailingPadding
+                                    selectByMouse: true
+
+                                    background: Rectangle {
+                                        color: Theme.colors.controlInset
+                                        radius: Theme.radius.control
+                                        border.width: cookieInput.activeFocus ? 1 : 0
+                                        border.color: Theme.colors.borderFocus
+                                    }
+
+                                    IconButton {
+                                        objectName: "cookieVisibilityButton"
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        iconSource: root.cookieVisible
+                                                    ? "qrc:/qt/qml/cursor_music/icon/eye-off.svg"
+                                                    : "qrc:/qt/qml/cursor_music/icon/eye.svg"
+                                        accessibleName: root.cookieVisible
+                                                        ? qsTr("Hide cookie") : qsTr("Show cookie")
+                                        onTriggered: root.cookieVisible = !root.cookieVisible
+                                    }
+                                }
+
+                                AppButton {
+                                    objectName: "importCookieButton"
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: qsTr("Import Cookie")
+                                    enabled: cookieInput.text.trim().length > 0
+                                    btnWidth: Theme.sizes.loginPrimaryButtonWidth
+                                    onClicked: {
+                                        root.authService.importCookie(cookieInput.text.trim())
+                                        cookieInput.clear()
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: root.loginResult.length > 0
+                                    text: root.loginResult
+                                    color: root.loginResult.startsWith(qsTr("Login successful"))
+                                           ? Theme.colors.accent : Theme.colors.error
+                                    font.pixelSize: Theme.fontSizes.caption
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.Wrap
+                                }
                             }
+                        }
 
-                            // ---- 二维码容器 ----
-                            Rectangle {
-                                Layout.alignment: Qt.AlignHCenter
-                                width: 236; height: 236
-                                radius: Theme.radius.card; color: "#ffffff"
+                        Rectangle {
+                            objectName: "qrLoginForm"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: qrLayout.implicitHeight + 2 * Theme.spacing.xl
+                            color: Theme.colors.surfaceRaised
+                            radius: Theme.radius.card
 
-                                // 占位状态
+                            ColumnLayout {
+                                id: qrLayout
+                                anchors.fill: parent
+                                anchors.margins: Theme.spacing.xl
+                                spacing: Theme.spacing.lg
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Scan with the Bilibili app")
+                                    color: Theme.colors.textTertiary
+                                    font.pixelSize: Theme.fontSizes.caption
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+
+                                SkeletonList {
+                                    objectName: "qrGeneratingState"
+                                    Layout.fillWidth: true
+                                    Layout.maximumWidth: Theme.sizes.loginQrSkeletonMaxWidth
+                                    Layout.alignment: Qt.AlignHCenter
+                                    visible: root.qrState === "generating"
+                                    count: 3
+                                }
+
                                 Rectangle {
-                                    anchors.centerIn: parent
-                                    width: 220; height: 220
-                                    color: "#f5f5f5"; visible: !qrImage.visible
+                                    objectName: "qrVisualState"
+                                    Layout.alignment: Qt.AlignHCenter
+                                    Layout.preferredWidth: Theme.sizes.loginQrFrameSize
+                                    Layout.preferredHeight: Theme.sizes.loginQrFrameSize
+                                    visible: root.qrState !== "generating"
+                                             && root.qrState !== "networkError"
+                                    color: Theme.colors.qrSurface
+                                    radius: Theme.radius.card
+
                                     Label {
                                         anchors.centerIn: parent
-                                        text: applicationContext.authService.qrLoginActive
-                                              ? qsTr("二维码加载中...")
-                                              : qsTr("点击下方按钮生成二维码")
-                                        color: Theme.colors.textMuted
+                                        width: parent.width - Theme.sizes.loginQrLabelInset
+                                        visible: !qrImage.visible
+                                        text: root.qrStatusText()
+                                        color: Theme.colors.textDisabled
                                         font.pixelSize: Theme.fontSizes.caption
+                                        horizontalAlignment: Text.AlignHCenter
+                                        wrapMode: Text.Wrap
+                                    }
+
+                                    Image {
+                                        id: qrImage
+                                        anchors.centerIn: parent
+                                        width: Theme.sizes.loginQrImageSize
+                                        height: Theme.sizes.loginQrImageSize
+                                        sourceSize.width: Theme.sizes.loginQrImageSize
+                                        sourceSize.height: Theme.sizes.loginQrImageSize
+                                        source: root.authService.qrImageUrl
+                                        visible: root.authService.qrImageUrl.length > 0
+                                        fillMode: Image.PreserveAspectFit
+                                        asynchronous: true
+                                        cache: false
                                     }
                                 }
 
-                                Image {
-                                    id: qrImage
-                                    anchors.centerIn: parent; width: 220; height: 220
-                                    // qrImageUrl 是 C++ 生成的二维码图片地址；为空时显示占位状态。
-                                    source: applicationContext.authService.qrImageUrl
-                                    visible: applicationContext.authService.qrImageUrl.length > 0
-                                    fillMode: Image.PreserveAspectFit; smooth: true; cache: false
-                                    onStatusChanged: {
-                                        if (status === Image.Error)
-                                            console.warn("QR code image failed to load:", source)
+                                ErrorState {
+                                    objectName: "qrErrorState"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Theme.sizes.statePanelHeight
+                                    visible: root.qrState === "networkError"
+                                    message: root.authService.qrStatus || qsTr("Network error")
+                                    onRetryRequested: root.authService.startQrLogin()
+                                }
+
+                                Label {
+                                    objectName: "qrStatusLabel"
+                                    Layout.fillWidth: true
+                                    visible: root.qrState !== "networkError"
+                                    text: root.qrStatusText()
+                                    color: root.qrStatusColor()
+                                    font.pixelSize: Theme.fontSizes.caption
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.Wrap
+                                }
+
+                                RowLayout {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    spacing: Theme.spacing.sm
+
+                                    AppButton {
+                                        objectName: "qrStartButton"
+                                        text: root.qrState === "generating"
+                                              ? qsTr("Generating…") : qsTr("Get QR code")
+                                        enabled: !root.authService.qrLoginActive
+                                        btnWidth: Theme.sizes.loginPrimaryButtonWidth
+                                        onClicked: root.authService.startQrLogin()
+                                    }
+
+                                    AppButton {
+                                        objectName: "qrStopButton"
+                                        text: qsTr("Cancel")
+                                        visible: root.authService.qrLoginActive
+                                        bgColor: Theme.colors.surfaceHover
+                                        btnWidth: Theme.sizes.loginSecondaryButtonWidth
+                                        onClicked: root.authService.stopQrLogin()
                                     }
                                 }
-                            }
-
-                            // ---- 状态文字 ----
-                            Label {
-                                Layout.alignment: Qt.AlignHCenter
-                                // qrStatus 由 C++ 轮询二维码状态时更新。
-                                text: applicationContext.authService.qrStatus
-                                color: {
-                                    var s = applicationContext.authService.qrStatus
-                                    if (s.includes("成功")) return "#4caf50"
-                                    if (s.includes("过期") || s.includes("失败")) return "#f44336"
-                                    if (s.includes("确认")) return "#ff9800"
-                                    return Theme.colors.textMuted
-                                }
-                                font.pixelSize: Theme.fontSizes.caption
-                                visible: text.length > 0
-                            }
-
-                            // ---- 操作按钮 ----
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter; spacing: Theme.spacing.item
-
-                                AppButton {
-                                    text: applicationContext.authService.qrLoginActive
-                                          ? qsTr("加载中...") : qsTr("获取二维码")
-                                    enabled: !applicationContext.authService.qrLoginActive
-                                    btnWidth: 160
-                                    // 开始扫码登录后，C++ 会生成二维码并启动 QTimer 轮询。
-                                    onClicked: applicationContext.authService.startQrLogin()
-                                }
-                                AppButton {
-                                    text: qsTr("取消")
-                                    visible: applicationContext.authService.qrLoginActive
-                                    bgColor: Theme.colors.borderInput
-                                    btnWidth: 100
-                                    // 取消只停止本地轮询，不需要调用 B站取消接口。
-                                    onClicked: applicationContext.authService.stopQrLogin()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ---- 使用说明卡片 ----
-            Rectangle {
-                Layout.fillWidth: true; Layout.preferredHeight: 160
-                radius: Theme.radius.card; color: Theme.colors.bgCard
-
-                Column {
-                    anchors.fill: parent; anchors.margins: Theme.spacing.section; spacing: Theme.spacing.compact
-
-                    Label {
-                        text: loginModeSwitch.currentIndex === 0
-                              ? qsTr("如何获取 Cookie？") : qsTr("扫码登录说明")
-                        color: Theme.colors.textSecondary
-                        font.pixelSize: Theme.fontSizes.h3; font.bold: true
-                    }
-
-                    Column {
-                        visible: loginModeSwitch.currentIndex === 0; spacing: 6
-                        Repeater {
-                            model: [
-                                qsTr("1. 在浏览器中打开 bilibili.com 并登录你的账号"),
-                                qsTr("2. 按 F12 打开开发者工具 → 网络(Network) 标签"),
-                                qsTr("3. 刷新页面，点击任意请求，在请求头中找到 Cookie 字段"),
-                                qsTr("4. 复制完整的 Cookie 值，粘贴到上方输入框中"),
-                                qsTr("注：Cookie 仅保存在本地，不会上传或泄露")
-                            ]
-                            delegate: Label {
-                                required property var modelData
-                                text: modelData
-                                color: index < 4 ? Theme.colors.textTertiary : Theme.colors.textDim
-                                font.pixelSize: Theme.fontSizes.caption
-                            }
-                        }
-                    }
-                    Column {
-                        visible: loginModeSwitch.currentIndex === 1; spacing: 6
-                        Repeater {
-                            model: [
-                                qsTr("1. 点击「获取二维码」按钮生成登录二维码"),
-                                qsTr("2. 打开B站手机APP，点击右上角扫码图标"),
-                                qsTr("3. 扫描屏幕上的二维码"),
-                                qsTr("4. 在手机上确认登录"),
-                                qsTr("注：二维码有效期为3分钟，过期后需刷新")
-                            ]
-                            delegate: Label {
-                                required property var modelData
-                                text: modelData
-                                color: index < 4 ? Theme.colors.textTertiary : Theme.colors.textDim
-                                font.pixelSize: Theme.fontSizes.caption
                             }
                         }
                     }

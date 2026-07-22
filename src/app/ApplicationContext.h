@@ -49,6 +49,7 @@ class ApplicationContext : public QObject
     // CONSTANT 表示属性值不会改变，QML 在首次读取后缓存结果
     Q_PROPERTY(QString appName READ appName CONSTANT)         // 应用名称，供 QML 显示
     Q_PROPERTY(QString qtVersion READ qtVersion CONSTANT)     // 当前 Qt 版本号
+    Q_PROPERTY(AppSettings *settings READ settings CONSTANT)
     Q_PROPERTY(AuthService *authService READ authService CONSTANT)    // 登录认证服务
     Q_PROPERTY(FavoriteService *favoriteService READ favoriteService CONSTANT) // 收藏夹服务
     Q_PROPERTY(MediaResolver *mediaResolver READ mediaResolver CONSTANT) // 媒体解析器

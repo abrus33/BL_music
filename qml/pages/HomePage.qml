@@ -1,95 +1,214 @@
-// ============================================================================
-// HomePage.qml - 首页（B站音乐区热门推荐 横向列表）
-//
-// 新人阅读重点：
-// 1. 这是最简单的一条“QML 调 C++ 服务”的链路。
-// 2. 页面启动时连接 musicService.musicRankLoaded 信号，然后调用 loadMusicRank()。
-// 3. C++ 返回 JSON 字符串，QML 用 JSON.parse() 转成数组给 Repeater 展示。
-// 4. 点击卡片时这里只走单曲播放，不创建 PlaylistService 播放列表。
-// ============================================================================
+pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components"
 import "../components/Theme.js" as Theme
 
-ScrollView {
-    clip: true
+Item {
+    id: root
 
-    // musicModel 是页面本地状态，不是 C++ Model。
-    // C++ 只传回 JSON 字符串，QML 解析后存到这个数组。
+    required property var musicService
+    required property var mediaResolver
+    required property var playerController
+
     property var musicModel: []
-    property bool _loading: false
+    property string viewState: "loading"
+    property string errorMessage: ""
+    property string playbackError: ""
+    property bool _resolvePending: false
+    readonly property string resolverOwnerToken: "home-" + Date.now().toString(36)
+                                                 + "-" + Math.random().toString(36).slice(2)
 
-    // Qt.callLater 让连接和加载动作推迟到组件创建完成之后执行，
-    // 避免 applicationContext 或子对象还没准备好时就访问。
-    Component.onCompleted: Qt.callLater(function() {
-        var svc = applicationContext ? applicationContext.musicService : null
-        if (!svc) return
-        svc.musicRankLoaded.connect(function(success, json, error) {
-            _loading = false
-            if (success && json && json.length > 0) {
-                try { musicModel = JSON.parse(json) } catch(e) {}
-            }
-        })
-        loadMusic()
-    })
-
-    function loadMusic() {
-        _loading = true; musicModel = []
-        // Q_INVOKABLE: 这里从 QML 直接调用 C++ 的 MusicService::loadMusicRank。
-        applicationContext.musicService.loadMusicRank(1, 6)
+    function rebuildMediaViewModel() {
+        mediaViewModel.clear()
+        for (let index = 0; index < musicModel.length; ++index) {
+            const item = musicModel[index]
+            mediaViewModel.append({
+                mediaId: item.id,
+                title: item.title || qsTr("Unknown track"),
+                coverUrl: item.cover || "",
+                uploader: item.artist || "",
+                resourceTypeLabel: qsTr("Audio"),
+                duration: formatDuration(item.duration),
+                invalid: false
+            })
+        }
     }
 
-    Rectangle {
-        implicitWidth: 900
-        implicitHeight: contentColumn.implicitHeight + 48
-        color: Theme.colors.bgContent
+    function formatDuration(seconds) {
+        if (seconds === undefined || seconds === null || seconds === "")
+            return ""
+        const total = Math.max(0, Math.floor(Number(seconds)))
+        const minutes = Math.floor(total / 60)
+        const remainder = total % 60
+        return (minutes < 10 ? "0" : "") + minutes + ":"
+                + (remainder < 10 ? "0" : "") + remainder
+    }
 
-        ColumnLayout {
-            id: contentColumn
-            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-            anchors.margins: Theme.spacing.page; spacing: Theme.spacing.card
+    function loadMusic() {
+        errorMessage = ""
+        musicModel = []
+        rebuildMediaViewModel()
+        viewState = "loading"
+        musicService.loadMusicRank(1, 6)
+    }
 
-            Label {
-                text: qsTr("B站音乐区热门")
-                color: Theme.colors.textPrimary
-                font.pixelSize: Theme.fontSizes.h1; font.bold: true
+    function handleMusicLoaded(success, json, error) {
+        if (!success) {
+            errorMessage = error || qsTr("Could not load popular music")
+            viewState = "error"
+            return
+        }
+
+        try {
+            const parsed = JSON.parse(json || "[]")
+            if (!Array.isArray(parsed))
+                throw new Error("Expected a JSON array")
+            musicModel = parsed
+            rebuildMediaViewModel()
+            errorMessage = ""
+            viewState = "ready"
+        } catch (parseError) {
+            musicModel = []
+            rebuildMediaViewModel()
+            errorMessage = qsTr("Invalid music response")
+            viewState = "error"
+        }
+    }
+
+    function playMedia(mediaId) {
+        if (_resolvePending)
+            return
+
+        for (let index = 0; index < musicModel.length; ++index) {
+            const item = musicModel[index]
+            if (item.id === mediaId) {
+                playbackError = ""
+                _resolvePending = true
+                playerController.mediaTitle = item.title || qsTr("Unknown")
+                playerController.mediaCover = item.cover || ""
+                mediaResolver.resolveForOwner(resolverOwnerToken, item.id, 12)
+                return
             }
+        }
+    }
 
-            AppButton {
-                text: qsTr("加载热门音乐")
-                visible: musicModel.length === 0 && !_loading
-                onClicked: loadMusic()
-            }
+    function handleMediaResolved(success, url, title, cover, duration, error) {
+        if (!_resolvePending)
+            return
 
-            Label {
-                visible: _loading
-                text: qsTr("加载中...")
-                color: Theme.colors.textMuted; font.pixelSize: Theme.fontSizes.caption
-            }
+        _resolvePending = false
+        if (!success || !url) {
+            playbackError = error || qsTr("Could not resolve this track")
+            return
+        }
 
-            // ---- 横向列表（与收藏夹资源列表布局一致） ----
-            Repeater {
-                model: musicModel
-                delegate: MediaCard {
-                    // Repeater 的 index 是 delegate 隐式提供的当前下标。
-                    readonly property var _item: musicModel[index] || {}
+        playbackError = ""
+        playerController.source = url
+        playerController.play()
+    }
+
+    Connections {
+        target: root.musicService
+
+        function onMusicRankLoaded(success, json, error) {
+            root.handleMusicLoaded(success, json, error)
+        }
+    }
+
+    Connections {
+        target: root.mediaResolver
+
+        function onMediaResolvedForOwner(ownerToken, success, url, title, cover,
+                                         duration, error) {
+            if (ownerToken !== root.resolverOwnerToken)
+                return
+            root.handleMediaResolved(success, url, title, cover, duration, error)
+        }
+    }
+
+    Component.onCompleted: Qt.callLater(function() { root.loadMusic() })
+
+    ListModel {
+        id: mediaViewModel
+    }
+
+    ScrollView {
+        id: pageScroll
+        anchors.fill: parent
+        clip: true
+        contentWidth: availableWidth
+        contentHeight: pageContent.height
+
+        Item {
+            id: pageContent
+            width: Math.max(pageScroll.availableWidth, Theme.sizes.favoritesContentMinWidth)
+            height: Math.max(Theme.sizes.favoritesContentMinHeight,
+                             pageColumn.implicitHeight + 2 * Theme.spacing.xl)
+
+            ColumnLayout {
+                id: pageColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Theme.spacing.xl
+                spacing: Theme.spacing.xl
+
+                PageHeader {
                     Layout.fillWidth: true
-                    implicitHeight: 100
-                    layoutMode: "list"
-                    coverUrl: _item.cover || ""
-                    title: _item.title || qsTr("未知歌曲")
-                    subtitle: _item.artist || ""
-                    duration: _item.duration || 0
-                    mediaType: 12
+                    title: qsTr("B站音乐区热门")
+                }
 
-                    onClicked: {
-                        // 首页卡片不经过播放列表，直接设置播放器展示信息并解析单首音频。
-                        applicationContext.playerController.mediaTitle = _item.title || qsTr("未知")
-                        applicationContext.playerController.mediaCover = _item.cover || ""
-                        applicationContext.mediaResolver.resolve(_item.id, 12)
-                    }
+                SkeletonList {
+                    objectName: "homeLoadingState"
+                    Layout.fillWidth: true
+                    visible: root.viewState === "loading"
+                    count: 6
+                }
+
+                MediaList {
+                    id: mediaList
+                    objectName: "homeMediaList"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.max(
+                                                Theme.sizes.mediaRowHeight,
+                                                count * (Theme.sizes.mediaRowHeight
+                                                         + Theme.spacing.xs))
+                    visible: root.viewState === "ready"
+                    enabled: !root._resolvePending
+                    interactive: false
+                    model: mediaViewModel
+                    onMediaActivated: function(mediaId) { root.playMedia(mediaId) }
+                }
+
+
+                Label {
+                    objectName: "homePlaybackError"
+                    Layout.fillWidth: true
+                    visible: root.playbackError.length > 0
+                    text: root.playbackError
+                    color: Theme.colors.error
+                    font.pixelSize: Theme.fontSizes.caption
+                    wrapMode: Text.Wrap
+                }
+
+                EmptyState {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Theme.sizes.statePanelHeight
+                    visible: root.viewState === "ready" && root.musicModel.length === 0
+                    title: qsTr("No popular music")
+                    message: qsTr("Try again later")
+                }
+
+                ErrorState {
+                    objectName: "homeErrorState"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Theme.sizes.statePanelHeight
+                    visible: root.viewState === "error"
+                    message: root.errorMessage
+                    onRetryRequested: root.loadMusic()
                 }
             }
         }
