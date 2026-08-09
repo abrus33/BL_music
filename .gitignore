@@ -85,6 +85,9 @@ build*/
 */build*/
 */build/*
 
+# Local Git worktrees used for isolated feature development
+/.worktrees/
+
 # Qt Creator / Clangd cache
 .qtc_clangd/
 
