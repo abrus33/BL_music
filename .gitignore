@@ -94,3 +94,5 @@ build*/
 # Old root-level files (moved to src/ and qml/)
 /main.cpp
 /Main.qml
+
+AGENTS.md
