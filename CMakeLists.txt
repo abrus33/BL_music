@@ -105,6 +105,7 @@ target_link_libraries(appcursor_music
 
 # 诊断仅在显式开启时编入 Android APK，普通构建不会自动向诊断站点发请求。
 option(BL_ANDROID_TLS_DIAGNOSTICS "Enable the one-shot Android HTTPS probe" OFF)
+option(BL_ANDROID_LIFECYCLE_DIAGNOSTICS "Observe Android application and player lifecycle" OFF)
 if(ANDROID)
     # TLS backend 是 Qt 的加密后端插件；Qt6::Network 不会自动提供其 OpenSSL 运行库。
     # 此目录由 scripts/build-android-openssl.sh 生成，只包含本次验证的 ARM64 库。
@@ -133,6 +134,13 @@ if(ANDROID)
     if(BL_ANDROID_TLS_DIAGNOSTICS)
         target_sources(appcursor_music PRIVATE src/platform/android/TlsDiagnostics.cpp)
         target_compile_definitions(appcursor_music PRIVATE BL_ANDROID_TLS_DIAGNOSTICS)
+    endif()
+    if(BL_ANDROID_LIFECYCLE_DIAGNOSTICS)
+        # 即使误在 Release 配置开启选项，也不编入生命周期日志；仅用于本轮 Debug 行为观察。
+        target_sources(appcursor_music PRIVATE
+            "$<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/LifecycleDiagnostics.cpp>"
+        )
+        target_compile_definitions(appcursor_music PRIVATE "$<$<CONFIG:Debug>:BL_ANDROID_LIFECYCLE_DIAGNOSTICS>")
     endif()
 endif()
 

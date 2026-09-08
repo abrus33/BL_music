@@ -9,6 +9,10 @@
 
 #include "app/ApplicationContext.h"
 
+#ifdef BL_ANDROID_LIFECYCLE_DIAGNOSTICS
+#include "platform/android/LifecycleDiagnostics.h"
+#endif
+
 #ifdef BL_ANDROID_TLS_DIAGNOSTICS
 #include "platform/android/TlsDiagnostics.h"
 #include <QTimer>
@@ -48,6 +52,11 @@ int main(int argc, char *argv[])
     // ---- 4. 创建 QML 引擎 和 全局服务上下文 ----
     QQmlApplicationEngine engine;
     ApplicationContext applicationContext;
+
+#ifdef BL_ANDROID_LIFECYCLE_DIAGNOSTICS
+    // 在事件循环开始前挂载只读观测器，覆盖初始化后异步加载及前后台变化；不控制播放。
+    LifecycleDiagnostics::start(app, *applicationContext.playerController());
+#endif
 
     // ---- 5. 初始化各服务 ----
     applicationContext.initialize();
