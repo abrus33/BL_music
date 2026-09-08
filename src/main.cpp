@@ -9,6 +9,11 @@
 
 #include "app/ApplicationContext.h"
 
+#ifdef BL_ANDROID_TLS_DIAGNOSTICS
+#include "platform/android/TlsDiagnostics.h"
+#include <QTimer>
+#endif
+
 /**
  * @brief 程序入口函数
  * @param argc 命令行参数个数
@@ -62,6 +67,14 @@ int main(int argc, char *argv[])
 
     // ---- 8. 加载 QML 模块 ----
     engine.loadFromModule("cursor_music", "Main");
+
+#ifdef BL_ANDROID_TLS_DIAGNOSTICS
+    // 仅诊断 APK 在 QML 创建成功后安排一次异步 HTTPS 检查。
+    // app 负责回调和网络对象的生命周期，退出时会取消尚未执行的回调。
+    if (!engine.rootObjects().isEmpty()) {
+        QTimer::singleShot(0, &app, [&app]() { AndroidTlsDiagnostics::start(&app); });
+    }
+#endif
 
     // ---- 9. 进入 Qt 事件循环 ----
     return app.exec();

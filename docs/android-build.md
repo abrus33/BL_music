@@ -1,5 +1,8 @@
 # Android Iteration 1：Qt for Android 构建
 
+> 本文保留首次构建和真机测试的历史记录。Iteration 2 起 Android 构建还需要显式提供
+> OpenSSL 运行库目录；当前可执行的完整命令见 [TLS 构建与验证](android-tls.md)。
+
 本文属于开发环境与构建层，供开发者在 Linux 上生成当前项目的 Android 调试 APK。
 它记录工具链的分工、构建命令和实际验证结果，避免依赖 Qt Creator 中未记录的本机配置。
 开发者调用 Qt 的 `qt-cmake`，再由 CMake/Ninja 调用 NDK、`androiddeployqt` 和 Gradle；

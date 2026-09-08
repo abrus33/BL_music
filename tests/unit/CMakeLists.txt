@@ -42,3 +42,11 @@ qt_add_executable(tst_appsettings
 target_include_directories(tst_appsettings PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(tst_appsettings PRIVATE Qt6::Test)
 add_test(NAME tst_appsettings COMMAND tst_appsettings)
+
+qt_add_executable(tst_tlsdiagnostics
+    tst_tlsdiagnostics.cpp
+    ${CMAKE_SOURCE_DIR}/src/platform/android/TlsDiagnostics.cpp
+)
+target_include_directories(tst_tlsdiagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(tst_tlsdiagnostics PRIVATE Qt6::Test Qt6::Network)
+add_test(NAME tst_tlsdiagnostics COMMAND tst_tlsdiagnostics)
