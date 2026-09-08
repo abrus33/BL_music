@@ -9,7 +9,8 @@
 
 本次目标是生成 **arm64-v8a Debug APK**。复用现有 CMake 和 Qt 自带 Android 模板，
 暂不创建自定义 `android/`、AndroidManifest、Java/Kotlin 或 JNI 桥接代码。
-不处理手机布局、后台播放、系统媒体控制或发布签名；不执行设备安装。
+不处理手机布局、后台播放、系统媒体控制或发布签名；构建命令本身不执行设备安装。
+2026-09-08 在用户完成 USB 调试授权后补充了首次真机安装与启动验证，结果见下文。
 
 桌面版本已由用户运行验证，本次不重复 desktop baseline / Iteration 0。
 
@@ -197,7 +198,55 @@ Qt 默认打包配置为 `minSdkVersion=28`、`targetSdkVersion=36`、`compileSd
 有弃用提示，Gradle 也提示模板使用了将于 Gradle 9 不兼容的功能。
 本次固定使用 Qt 模板的 Gradle 8.14.3，构建成功。保留日志，不据此修改界面或业务逻辑。
 
-## 真机人工检查点
+## 2026-09-08 首次真机验证
+
+**首次安装、启动、QML 界面显示和无立即崩溃检查通过；网络与播放不属于本次验收范围。**
+
+用户先确认手机已连接，首次 `adb devices` 返回 `unauthorized`；等待用户在手机上允许
+USB 调试后再次检查，设备状态变为 `device`，才执行安装与启动。
+手机报告型号 V2417A、Android 16 / API 36、ABI `arm64-v8a`。
+安装前目标包不存在；安装的 APK SHA-256 与上方 2026-09-07 的构建产物一致。
+
+| 检查 | 证据与结论 |
+| --- | --- |
+| 安装 | `adb install` 返回 `Success` |
+| 首次启动 | `am start -W -n org.qtproject.example.appcursor_music/org.qtproject.qt.android.bindings.QtActivity` 返回 `Status: ok`、`LaunchState: COLD`、`TotalTime: 460` ms |
+| QML 界面 | 实际截屏显示登录页、底部播放器和导航栏；表明 Main.qml 所组织的界面已实际显示，不代表手机布局验收通过 |
+| 进程存活 | 两次 `pidof` 均返回 PID 19407，复查时 `topResumedActivity` 为本项目 QtActivity |
+| 启动崩溃检查 | 本次采集的该 PID 日志未发现 `FATAL EXCEPTION`、`Fatal signal` 或 QML 组件加载失败；结论仅覆盖本次短时启动观察 |
+| HTTPS / TLS | **日志观察到初始化失败**，详见下方；不能标记网络功能通过 |
+| 登录 / Cookie 持久化 / 音频播放 / 后台行为 | 未执行专项测试 |
+| 构建 / 静态检查 | 使用上一日已验证的相同 APK；本次仅更新文档，没有重新编译或运行 CTest/Qt Quick tests |
+
+Android 的 `am` 是通过 adb shell 调用系统 Activity 管理功能的命令行工具。
+`am start -W` 请求 Android 启动指定界面入口，并等待系统返回启动结果；
+这里由 Android Framework 启动 QtActivity，再由 Qt 加载原有 C++/QML 应用。
+`Status: ok` 需要结合截图、进程状态和日志一起判断，单独不能证明界面或业务功能正确。
+
+本地证据位于 `build/android-arm64-debug/device-validation-2026-09-08/`：
+
+- `screen.png`：真机画面；
+- `app-logcat.txt`：按本项目 PID 过滤的启动观察日志。
+
+日志和截图仅保留在被忽略的构建目录，不提交到 Git。
+
+### 已发现的后续问题：TLS 运行库加载失败
+
+本次日志中存在以下实际诊断：
+
+```text
+qt.multimedia.symbolsresolver: Couldn't load ssl library
+qt.tlsbackend.ossl: Failed to load libssl/libcrypto.
+qt.network.ssl: No functional TLS backend was found
+qt.network.ssl: QSslSocket::connectToHostEncrypted: TLS initialization failed
+```
+
+TLS 是 HTTPS 使用的传输加密机制，Qt Network 需要可工作的 TLS 后端才能建立 HTTPS 连接。
+当前日志证明 TLS 后端未能初始化；系统 linker 同时报告系统 libcrypto 不可被应用加载。
+这不阻止界面启动，但会阻碍 HTTPS 请求。后续应独立检查 Android OpenSSL 库的打包、
+版本及加载方式，再依据日志作最小修复；本次不修改业务代码、不开始网络适配迭代。
+
+## 真机人工检查点流程
 
 生成 APK 后停在构建验证阶段，不自动进入后续功能开发或设备部署。
 后续首次部署只验证安装、启动、Main.qml 显示以及是否立即崩溃。
