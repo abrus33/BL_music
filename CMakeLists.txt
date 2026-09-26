@@ -107,6 +107,10 @@ target_link_libraries(appcursor_music
 option(BL_ANDROID_TLS_DIAGNOSTICS "Enable the one-shot Android HTTPS probe" OFF)
 option(BL_ANDROID_LIFECYCLE_DIAGNOSTICS "Observe Android application and player lifecycle" OFF)
 if(ANDROID)
+    # androiddeployqt 将此目录中的 Manifest 合入 APK；仅定制 Qt 后台事件循环策略。
+    set_property(TARGET appcursor_music PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/android"
+    )
     # TLS backend 是 Qt 的加密后端插件；Qt6::Network 不会自动提供其 OpenSSL 运行库。
     # 此目录由 scripts/build-android-openssl.sh 生成，只包含本次验证的 ARM64 库。
     set(BL_ANDROID_OPENSSL_DIR "" CACHE PATH "Directory containing Android ARM64 OpenSSL 3 libraries")

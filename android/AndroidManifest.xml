@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<!-- Android 打包层配置：基于 Qt 6.10.2 默认模板，仅增加后台事件循环配置。
+     CMake 指定本目录，androiddeployqt 填充占位符，Android/QtLoader 读取最终 Manifest。
+     现有 QtActivity 仍启动同一 C++ ApplicationContext 和播放器，不新增原生播放组件。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.qtproject.example"
+    android:installLocation="auto"
+    android:versionCode="-- %%INSERT_VERSION_CODE%% --"
+    android:versionName="-- %%INSERT_VERSION_NAME%% --">
+    <!-- %%INSERT_PERMISSIONS -->
+    <!-- %%INSERT_FEATURES -->
+    <supports-screens
+        android:anyDensity="true"
+        android:largeScreens="true"
+        android:normalScreens="true"
+        android:smallScreens="true" />
+    <application
+        android:name="org.qtproject.qt.android.bindings.QtApplication"
+        android:hardwareAccelerated="true"
+        android:label="-- %%INSERT_APP_NAME%% --"
+        android:icon="-- %%INSERT_APP_ICON%% --"
+        android:requestLegacyExternalStorage="true"
+        android:allowBackup="true"
+        android:fullBackupOnly="false">
+        <!-- Activity 是系统管理的界面组件；Framework 创建 QtActivity 并调用其生命周期，
+             Qt 将这些回调转交给现有 QGuiApplication。保留模板的启动入口和 exported 设置。 -->
+        <activity
+            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+            android:label="-- %%INSERT_APP_NAME%% --"
+            android:launchMode="singleTop"
+            android:screenOrientation="unspecified"
+            android:exported="true">
+            <!-- 保留 Qt 模板的桌面启动入口：允许系统 Launcher 打开此 Activity。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+          <meta-data
+                android:name="android.app.lib_name"
+                android:value="-- %%INSERT_APP_LIB_NAME%% --" />
+
+          <meta-data
+                android:name="android.app.arguments"
+                android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
+
+            <!-- Qt-specific metadata，不是 Android Framework 保活开关。
+                 QtLoader 将 true 转为 QT_BLOCK_EVENT_LOOPS_WHEN_SUSPENDED=0，
+                 使 Qt 不因 Suspended 主动阻塞事件循环；不能阻止系统冻结或杀进程。 -->
+            <meta-data
+                android:name="android.app.background_running"
+                android:value="true" />
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.qtprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/qtprovider_paths"/>
+        </provider>
+    </application>
+</manifest>
