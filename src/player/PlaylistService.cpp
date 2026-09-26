@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include "PlaylistService.h"
+#include "platform/android/LifecycleDiagnostics.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -136,9 +137,11 @@ void PlaylistService::createPlaylist(const QString &itemsJson, qint64 startItemI
 
 void PlaylistService::next()
 {
+    BL_LIFECYCLE_EVENT("NEXT_TRACK_REQUEST", {"index", m_currentIndex}, {"size", m_items.size()});
     if (m_items.isEmpty()) return;
 
     m_currentIndex = computeNextIndex();
+    BL_LIFECYCLE_EVENT("NEXT_INDEX", {"index", m_currentIndex});
 
     emit currentIndexChanged();
     emit currentItemChanged();
@@ -264,6 +267,8 @@ void PlaylistService::resolveAndPlayCurrentItem()
     ++m_resolveGen;
 
     // 异步解析
+    BL_LIFECYCLE_EVENT("PLAYLIST_RESOLVE_START", {"index", m_currentIndex}, {"generation", m_resolveGen},
+                       {"itemId", id}, {"type", type});
     m_mediaResolver->resolve(id, type, bvid, 0);
 
     // 启动位置保存定时器
@@ -385,6 +390,7 @@ void PlaylistService::shuffleOrder()
  */
 void PlaylistService::onTrackFinished()
 {
+    BL_LIFECYCLE_EVENT("TRACK_FINISHED_RECEIVED", {"index", m_currentIndex}, {"resolving", m_isResolving});
     if (m_isResolving) {
         DBG << "onTrackFinished: 正在解析中, 跳过自动切歌";
         return;
@@ -407,6 +413,9 @@ void PlaylistService::onTrackFinished()
 void PlaylistService::onMediaResolved(bool success, const QString &url,
                                        const QString &, const QString &, int, const QString &error)
 {
+    // generation 只是当前值，不代表已校验响应归属；本轮保留原有门控，不修复未复现的竞态。
+    BL_LIFECYCLE_EVENT("PLAYLIST_RESOLVE_FINISH", {"index", m_currentIndex}, {"currentGeneration", m_resolveGen},
+                       {"resolving", m_isResolving}, {"success", success}, {"sourceId", LifecycleDiagnostics::sourceId(url)});
     if (!m_isResolving) {
         // 此 resolve 不是由 PlaylistService 发起的，忽略
         return;

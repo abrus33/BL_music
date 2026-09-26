@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
 
 #ifdef BL_ANDROID_LIFECYCLE_DIAGNOSTICS
     // 在事件循环开始前挂载只读观测器，覆盖初始化后异步加载及前后台变化；不控制播放。
-    LifecycleDiagnostics::start(app, *applicationContext.playerController());
+    LifecycleDiagnostics::start(app, *applicationContext.playerController(), *applicationContext.playlistService());
 #endif
 
     // ---- 5. 初始化各服务 ----

@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include "BilibiliApiClient.h"
+#include "platform/android/LifecycleDiagnostics.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -101,6 +102,7 @@ void BilibiliApiClient::getJson(const QString &apiName, const QUrl &url,
     request.setRawHeader("Origin", "https://www.bilibili.com");
 
     QNetworkReply *reply = m_httpClient->networkManager()->get(request);
+    BL_LIFECYCLE_REQUEST(reply, "API_JSON");
 
     QObject::connect(reply, &QNetworkReply::finished, this, [reply, apiName, callback, this]() {
         reply->deleteLater();

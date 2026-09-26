@@ -5,6 +5,7 @@
 // ============================================================================
 
 #include "PlayerController.h"
+#include "platform/android/LifecycleDiagnostics.h"
 
 #include <QMediaPlayer>
 #include <QAudioOutput>
@@ -63,6 +64,7 @@ void PlayerController::setSource(const QString &url)
 
     // 清理旧资源
     if (m_currentReply) {
+        BL_LIFECYCLE_EVENT("DOWNLOAD_CANCEL", {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
         m_currentReply->disconnect();
         m_currentReply->abort();
         m_currentReply->deleteLater();
@@ -87,9 +89,12 @@ void PlayerController::setSource(const QString &url)
 
     QNetworkReply *reply = m_nam->get(request);
     m_currentReply = reply;
+    BL_LIFECYCLE_REQUEST(reply, "MEDIA_DOWNLOAD");
 
     // 连接下载完成信号
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        BL_LIFECYCLE_EVENT("DOWNLOAD_CALLBACK", {"sourceId", LifecycleDiagnostics::sourceId(m_source)},
+                           {"networkError", int(reply->error())});
         m_currentReply = nullptr;  // 防止重复清理
 
         if (reply->error() != QNetworkReply::NoError) {
@@ -101,6 +106,7 @@ void PlayerController::setSource(const QString &url)
 
         // 读取所有下载数据
         QByteArray data = reply->readAll();
+        BL_LIFECYCLE_EVENT("DOWNLOAD_FINISH", {"sourceId", LifecycleDiagnostics::sourceId(m_source)}, {"bytes", data.size()});
         DBG << "下载完成, 大小:" << data.size() << "字节";
         reply->deleteLater();
 
@@ -116,11 +122,16 @@ void PlayerController::setSource(const QString &url)
         m_mediaBuffer->open(QIODevice::ReadOnly);
 
         DBG << "设置 QBuffer 为播放源设备, 大小:" << data.size();
+        BL_LIFECYCLE_EVENT("SOURCE_DEVICE_SET", {"sourceId", LifecycleDiagnostics::sourceId(m_source)},
+                           {"open", m_mediaBuffer->isOpen()}, {"bytes", m_mediaBuffer->size()}, {"pending", m_pendingPlay});
         m_player->setSourceDevice(m_mediaBuffer, QUrl());
+        BL_LIFECYCLE_EVENT("SOURCE_READY", {"attached", m_player->sourceDevice() == m_mediaBuffer},
+                           {"sourceId", LifecycleDiagnostics::sourceId(m_source)}, {"pending", m_pendingPlay});
         emit sourceChanged();
 
         // 标记待播放并在媒体加载完成后自动播放
         m_pendingPlay = true;
+        BL_LIFECYCLE_EVENT("PENDING_PLAY_SET", {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
     });
 
     // 网络错误处理
@@ -182,12 +193,14 @@ void PlayerController::setMediaCover(const QString &cover)
 
 void PlayerController::play()
 {
+    BL_LIFECYCLE_EVENT("PLAY_REQUEST", {"sourceId", LifecycleDiagnostics::sourceId(m_source)}, {"duration", duration()});
     DBG << "play(), playState:" << playbackState()
         << "duration:" << m_player->duration();
     m_pendingPlay = false;
 
     if (m_player->playbackState() != QMediaPlayer::StoppedState ||
         m_player->duration() > 0) {
+        BL_LIFECYCLE_EVENT("MEDIA_PLAY_CALL", {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
         m_player->play();
     } else {
         DBG << "媒体尚未加载完成, 设置 pendingPlay";
@@ -212,6 +225,7 @@ void PlayerController::seek(int positionMs)
 {
     if (m_player->duration() <= 0) return;
     DBG << "seek:" << positionMs;
+    BL_LIFECYCLE_EVENT("SEEK_REQUEST", {"position", positionMs}, {"duration", duration()});
     m_player->setPosition(positionMs);
 }
 
@@ -232,8 +246,12 @@ void PlayerController::onErrorOccurred()
 
 void PlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
 {
+    // 在任何业务分支之前记录原始参数，避免 EndOfMedia → next 同步重入覆盖证据。
+    BL_LIFECYCLE_EVENT("MEDIA_STATUS_RECEIVED", {"status", int(status)}, {"pending", m_pendingPlay},
+                       {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
     if (status == QMediaPlayer::EndOfMedia) {
         DBG << "Track finished (EndOfMedia), emitting trackFinished";
+        BL_LIFECYCLE_EVENT("TRACK_END", {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
         emit trackFinished();
     } else if (status == QMediaPlayer::LoadedMedia && m_pendingPlay) {
         // 媒体加载完成且有待播放标志：自动开始播放
@@ -242,6 +260,7 @@ void PlayerController::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
         //   → LoadedMedia 状态触发 → 在此处执行被延迟的 play()
         m_pendingPlay = false;
         DBG << "LoadedMedia + pendingPlay, auto-playing";
+        BL_LIFECYCLE_EVENT("MEDIA_PLAY_CALL", {"sourceId", LifecycleDiagnostics::sourceId(m_source)});
         m_player->play();
     }
 }

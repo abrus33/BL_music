@@ -7,6 +7,7 @@
 #include "LifecycleDiagnostics.h"
 
 #include "player/PlayerController.h"
+#include "player/PlaylistService.h"
 #include <QAudioDevice>
 #include <QAudioOutput>
 #include <QCryptographicHash>
@@ -17,23 +18,70 @@
 #include <QPointer>
 #include <QTimer>
 #include <QUrl>
+#include <QJsonDocument>
+#include <QNetworkReply>
+#include <atomic>
 
 namespace LifecycleDiagnostics {
+
+QString sourceId(const QString &source)
+{
+    return source.isEmpty() ? QStringLiteral("none")
+        : QString::fromLatin1(QCryptographicHash::hash(source.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+}
+
+void event(const char *name, const QVariantMap &fields)
+{
+    // 递增序号反映实际日志调用顺序，elapsedMs 使用单调时钟；不靠周期轮询推断事件循环健康。
+    static std::atomic<quint64> sequence{0};
+    static const QElapsedTimer clock = [] { QElapsedTimer value; value.start(); return value; }();
+    qInfo().noquote() << "[TransitionProbe] seq=" << ++sequence << "elapsedMs=" << clock.elapsed()
+                     << "event=" << name << "app=" << QGuiApplication::applicationState()
+                     << QJsonDocument::fromVariant(fields).toJson(QJsonDocument::Compact);
+}
+
+void watchRequest(QNetworkReply *reply, const char *kind)
+{
+    // QNetworkReply 由已有 QNetworkAccessManager 创建和管理；诊断只监听 finished，
+    // 不 readAll、不 abort、不延长其生命周期。请求号独立于地址，避免对象地址复用造成误关联。
+    static quint64 nextRequest = 0;
+    const quint64 requestId = ++nextRequest;
+    const QString urlId = sourceId(reply->request().url().toString());
+    event("NETWORK_START", {{"request", requestId}, {"kind", kind}, {"urlId", urlId},
+                            {"https", reply->request().url().scheme() == QStringLiteral("https")}});
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, requestId, kind, urlId] {
+        event("NETWORK_FINISH", {{"request", requestId}, {"kind", kind}, {"urlId", urlId},
+                                 {"http", reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)},
+                                 {"networkError", int(reply->error())}});
+    });
+}
+
 namespace {
 
 class Observer final : public QObject
 {
 public:
-    Observer(QGuiApplication &app, PlayerController &controller, QMediaPlayer &player, QAudioOutput &audio)
-        : QObject(&app), m_controller(&controller), m_player(&player), m_audio(&audio)
+    Observer(QGuiApplication &app, PlayerController &controller, QMediaPlayer &player, QAudioOutput &audio, PlaylistService &playlist)
+        : QObject(&app), m_controller(&controller), m_player(&player), m_audio(&audio), m_playlist(&playlist)
     {
         m_elapsed.start();
+        connect(&playlist, &PlaylistService::currentIndexChanged, this, [this] {
+            snapshot("playlistIndexChanged");
+        });
         // Framework 的前台/可见性变化经 Qt 平台层触发此信号；这里只采样，不据此自动暂停/恢复。
         connect(&app, &QGuiApplication::applicationStateChanged, this,
                 [this](Qt::ApplicationState) { snapshot("applicationStateChanged"); });
         connect(&app, &QCoreApplication::aboutToQuit, this, [this] { snapshot("aboutToQuit"); });
-        connect(&player, &QMediaPlayer::playbackStateChanged, this, [this] { snapshot("playbackStateChanged"); });
-        connect(&player, &QMediaPlayer::mediaStatusChanged, this, [this] { snapshot("mediaStatusChanged"); });
+        connect(&player, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
+            LifecycleDiagnostics::event("PLAYER_STATE_SIGNAL", {{"state", int(state)},
+                {"sourceId", m_controller ? sourceId(m_controller->source()) : QStringLiteral("destroyed")}});
+            snapshot("playbackStateChanged");
+        });
+        connect(&player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
+            // 保存本次 signal 参数；前面的业务槽可能已同步切源，此刻 getter 未必仍是该状态。
+            LifecycleDiagnostics::event("MEDIA_STATUS_SIGNAL", {{"status", int(status)}, {"currentStatus", int(m_player->mediaStatus())}});
+            snapshot("mediaStatusChanged");
+        });
         connect(&player, &QMediaPlayer::sourceChanged, this, [this] { snapshot("mediaSourceChanged"); });
         connect(&player, &QMediaPlayer::durationChanged, this, [this] { snapshot("durationChanged"); });
         connect(&player, &QMediaPlayer::errorOccurred, this, [this] { snapshot("playerError"); });
@@ -74,6 +122,7 @@ private:
         qInfo() << "[LifecycleProbe] event=" << reason << "elapsedMs=" << m_elapsed.elapsed()
                 << "app=" << QGuiApplication::applicationState()
                 << "playback=" << m_player->playbackState() << "media=" << m_player->mediaStatus()
+                << "index=" << (m_playlist ? m_playlist->currentIndex() : -1)
                 << "position=" << m_player->position() << "duration=" << m_player->duration()
                 << "sourceId=" << sourceId << "sourceHost=" << QUrl(source).host()
                 << "sourceEmpty=" << source.isEmpty()
@@ -90,12 +139,13 @@ private:
     QPointer<PlayerController> m_controller;
     QPointer<QMediaPlayer> m_player;
     QPointer<QAudioOutput> m_audio;
+    QPointer<PlaylistService> m_playlist; // 借用队列，用于返回前台时核对 index，不延长队列寿命。
     QElapsedTimer m_elapsed; // 单调经过时间，用于与播放 position 增量比较，不受系统时钟校正影响。
     QTimer m_timer;
 };
 } // namespace
 
-void start(QGuiApplication &app, PlayerController &controller)
+void start(QGuiApplication &app, PlayerController &controller, PlaylistService &playlist)
 {
     // 已阅读的控制器构造函数明确创建一对直接子对象；诊断通过 QObject 树观察，避免增加业务 getter。
     const auto players = controller.findChildren<QMediaPlayer *>(QString(), Qt::FindDirectChildrenOnly);
@@ -104,6 +154,6 @@ void start(QGuiApplication &app, PlayerController &controller)
         qWarning() << "[LifecycleProbe] attachment failed: expected one direct player/audio pair";
         return;
     }
-    new Observer(app, controller, *players.front(), *outputs.front());
+    new Observer(app, controller, *players.front(), *outputs.front(), playlist);
 }
 } // namespace LifecycleDiagnostics

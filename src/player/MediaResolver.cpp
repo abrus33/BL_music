@@ -1,4 +1,5 @@
 #include "MediaResolver.h"
+#include "platform/android/LifecycleDiagnostics.h"
 
 #include <QDebug>
 #include <QPointer>
@@ -41,6 +42,17 @@ void MediaResolver::resolveForOwner(const QString &ownerToken, qint64 id, int ty
 void MediaResolver::resolveInternal(qint64 id, int type, const QString &bvid,
                                     qint64 cid, ResultHandler handler)
 {
+#ifdef BL_ANDROID_LIFECYCLE_DIAGNOSTICS
+    // 观测编号随本次回调捕获，不改变 Resolver 的返回值、分支或业务请求归属。
+    static quint64 nextResolve = 0;
+    const quint64 resolveId = ++nextResolve;
+    BL_LIFECYCLE_EVENT("RESOLVE_START", {"resolve", resolveId}, {"itemId", id}, {"type", type});
+    handler = [handler, resolveId](bool success, const QString &url, const QString &error) {
+        BL_LIFECYCLE_EVENT("RESOLVE_FINISH", {"resolve", resolveId}, {"success", success},
+                           {"sourceId", LifecycleDiagnostics::sourceId(url)});
+        handler(success, url, error);
+    };
+#endif
     DBG << "resolve - id:" << id << "type:" << type << "bvid:" << bvid;
 
     if (!m_apiClient) {

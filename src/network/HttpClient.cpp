@@ -4,6 +4,7 @@
 // ============================================================================
 
 #include "HttpClient.h"
+#include "platform/android/LifecycleDiagnostics.h"
 
 #include <QNetworkAccessManager>    // 核心网络引擎
 #include <QNetworkRequest>          // HTTP 请求封装（URL、Header）
@@ -179,6 +180,7 @@ void HttpClient::post(const QUrl &url, const QByteArray &data,
  */
 void HttpClient::handleReply(QNetworkReply *reply, int timeoutMs)
 {
+    BL_LIFECYCLE_REQUEST(reply, "HTTP_CLIENT");
     // ---- 1. 创建超时定时器 ----
     // new QTimer(reply): 将定时器的父对象设为 reply
     // 这样 reply 被 deleteLater 时，timer 也会自动释放
